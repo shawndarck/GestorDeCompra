@@ -158,6 +158,8 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(1200, 1500));
     await tester.pumpWidget(const PriceScoutApp());
 
+    await tester.tap(find.text('Comparador'));
+    await tester.pump(const Duration(milliseconds: 250));
     await tester.tap(find.text('Registrar compra'));
     await tester.pump(const Duration(milliseconds: 250));
     await tester.tap(find.text('Guardar'));
@@ -171,11 +173,26 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(1200, 1500));
     await tester.pumpWidget(const PriceScoutApp());
 
+    await tester.tap(find.text('Comparador'));
+    await tester.pump(const Duration(milliseconds: 250));
     await tester.tap(find.text('Compras guardadas'));
     await tester.pump(const Duration(milliseconds: 250));
 
     expect(find.text('Compras guardadas'), findsWidgets);
     expect(find.text('Aun no hay compras registradas.'), findsOneWidget);
+  });
+
+  testWidgets('module selector exposes inventory and sales modules', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1500));
+    await tester.pumpWidget(const PriceScoutApp());
+
+    await tester.tap(find.text('Comparador'));
+    await tester.pump(const Duration(milliseconds: 250));
+
+    expect(find.text('Registrar inventario'), findsOneWidget);
+    expect(find.text('Registrar ventas'), findsOneWidget);
   });
 
   test('purchase calculations read Colombian TRM separators correctly', () {

@@ -215,6 +215,70 @@ Future<void> deleteAliExpressViability(int id) async {
   }
 }
 
+Future<List<InventoryItemRecord>> loadInventoryItems() async {
+  final request = await _request('$_baseUrl/inventory');
+  final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
+  return (body['items'] as List<dynamic>? ?? const [])
+      .whereType<Map<String, dynamic>>()
+      .map(InventoryItemRecord.fromJson)
+      .toList();
+}
+
+Future<InventoryItemRecord> saveInventoryItem(InventoryItemDraft draft) async {
+  final request = await _request(
+    '$_baseUrl/inventory',
+    method: 'POST',
+    requestHeaders: {'Content-Type': 'application/json'},
+    sendData: jsonEncode(draft.toJson()),
+  );
+  final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
+  if (request.status != 200) {
+    throw Exception(
+      body['message'] as String? ?? 'No pude guardar inventario.',
+    );
+  }
+  return InventoryItemRecord.fromJson(body['item'] as Map<String, dynamic>);
+}
+
+Future<void> deleteInventoryItem(int id) async {
+  final request = await _request('$_baseUrl/inventory/$id', method: 'DELETE');
+  if (request.status != 200) {
+    final body =
+        jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
+    throw Exception(
+      body['message'] as String? ?? 'No pude eliminar inventario.',
+    );
+  }
+}
+
+Future<List<SaleRecord>> loadSales() async {
+  final request = await _request('$_baseUrl/sales');
+  final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
+  return (body['sales'] as List<dynamic>? ?? const [])
+      .whereType<Map<String, dynamic>>()
+      .map(SaleRecord.fromJson)
+      .toList();
+}
+
+Future<SaleSaveResult> saveSale(SaleDraft draft) async {
+  final request = await _request(
+    '$_baseUrl/sales',
+    method: 'POST',
+    requestHeaders: {'Content-Type': 'application/json'},
+    sendData: jsonEncode(draft.toJson()),
+  );
+  final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
+  if (request.status != 200) {
+    throw Exception(
+      body['message'] as String? ?? 'No pude registrar la venta.',
+    );
+  }
+  return SaleSaveResult(
+    sale: SaleRecord.fromJson(body['sale'] as Map<String, dynamic>),
+    lowStock: body['lowStock'] == true,
+  );
+}
+
 Future<double?> fetchCurrentTrm() async {
   final request = await _request('$_baseUrl/trm');
   final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;

@@ -173,9 +173,13 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
   List<ProductResult> _results = const [];
   List<PurchaseRecord> _purchases = const [];
   List<AliExpressViabilityRecord> _viabilityRecords = const [];
+  List<InventoryItemRecord> _inventoryItems = const [];
+  List<SaleRecord> _sales = const [];
   String? _statusMessage;
   String? _purchaseMessage;
   String? _viabilityMessage;
+  String? _inventoryMessage;
+  String? _salesMessage;
   int? _editingPurchaseId;
   int? _editingViabilityId;
   int _activeTab = 0;
@@ -238,7 +242,7 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
                         onLogout: _logout,
                       ),
                       const SizedBox(height: 28),
-                      _SectionTabs(
+                      _ModuleSelector(
                         activeIndex: _activeTab,
                         onChanged: _changeTab,
                       ),
@@ -329,12 +333,26 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
                           onSave: _saveAliExpressViability,
                           onCancelEdit: _cancelEditViability,
                         )
-                      else
+                      else if (_activeTab == 4)
                         _SavedViabilitiesSection(
                           records: _viabilityRecords,
                           message: _viabilityMessage,
                           onEdit: _startEditViability,
                           onDelete: _deleteAliExpressViability,
+                        )
+                      else if (_activeTab == 5)
+                        _InventorySection(
+                          items: _inventoryItems,
+                          message: _inventoryMessage,
+                          onSave: _saveInventoryItem,
+                          onDelete: _deleteInventoryItem,
+                        )
+                      else
+                        _SalesSection(
+                          inventoryItems: _inventoryItems,
+                          sales: _sales,
+                          message: _salesMessage,
+                          onSave: _saveSale,
                         ),
                     ],
                   ),
@@ -356,6 +374,8 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
     if (session != null) {
       await _loadPurchases();
       await _loadAliExpressViabilities();
+      await _loadInventoryItems();
+      await _loadSales();
       await _loadCurrentTrmSuggestion();
     }
   }
@@ -364,6 +384,8 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
     setState(() => _authSession = session);
     await _loadPurchases();
     await _loadAliExpressViabilities();
+    await _loadInventoryItems();
+    await _loadSales();
     await _loadCurrentTrmSuggestion();
   }
 
@@ -373,6 +395,8 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
       _authSession = null;
       _purchases = const [];
       _viabilityRecords = const [];
+      _inventoryItems = const [];
+      _sales = const [];
       _editingPurchaseId = null;
       _editingViabilityId = null;
       _activeTab = 0;
@@ -437,6 +461,11 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
     if (index == 1) _loadCurrentTrmSuggestion();
     if (index == 2) _loadPurchases();
     if (index == 4) _loadAliExpressViabilities();
+    if (index == 5) _loadInventoryItems();
+    if (index == 6) {
+      _loadInventoryItems();
+      _loadSales();
+    }
   }
 
   Future<void> _loadCurrentTrmSuggestion() async {
@@ -484,6 +513,28 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
     }
   }
 
+  Future<void> _loadInventoryItems() async {
+    try {
+      final items = await loadInventoryItems();
+      if (!mounted) return;
+      setState(() => _inventoryItems = items);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _inventoryMessage = _cleanError(error));
+    }
+  }
+
+  Future<void> _loadSales() async {
+    try {
+      final sales = await loadSales();
+      if (!mounted) return;
+      setState(() => _sales = sales);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _salesMessage = _cleanError(error));
+    }
+  }
+
   Future<bool> _savePurchase(PurchaseDraft draft) async {
     try {
       await savePurchase(draft, id: _editingPurchaseId);
@@ -518,6 +569,44 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
     } catch (error) {
       if (!mounted) return false;
       setState(() => _viabilityMessage = _cleanError(error));
+      return false;
+    }
+  }
+
+  Future<bool> _saveInventoryItem(InventoryItemDraft draft) async {
+    try {
+      await saveInventoryItem(draft);
+      final items = await loadInventoryItems();
+      if (!mounted) return false;
+      setState(() {
+        _inventoryItems = items;
+        _inventoryMessage = 'Inventario guardado correctamente.';
+      });
+      return true;
+    } catch (error) {
+      if (!mounted) return false;
+      setState(() => _inventoryMessage = _cleanError(error));
+      return false;
+    }
+  }
+
+  Future<bool> _saveSale(SaleDraft draft) async {
+    try {
+      final result = await saveSale(draft);
+      final items = await loadInventoryItems();
+      final sales = await loadSales();
+      if (!mounted) return false;
+      setState(() {
+        _inventoryItems = items;
+        _sales = sales;
+        _salesMessage = result.lowStock
+            ? 'Venta registrada. Alerta: ${result.sale.productName} queda con ${_formatInputNumber(result.sale.remainingQuantity)} unidades en ${result.sale.warehouse}.'
+            : 'Venta registrada correctamente.';
+      });
+      return true;
+    } catch (error) {
+      if (!mounted) return false;
+      setState(() => _salesMessage = _cleanError(error));
       return false;
     }
   }
@@ -581,6 +670,21 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _viabilityMessage = _cleanError(error));
+    }
+  }
+
+  Future<void> _deleteInventoryItem(int id) async {
+    try {
+      await deleteInventoryItem(id);
+      final items = await loadInventoryItems();
+      if (!mounted) return;
+      setState(() {
+        _inventoryItems = items;
+        _inventoryMessage = 'Inventario eliminado.';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _inventoryMessage = _cleanError(error));
     }
   }
 
@@ -1142,48 +1246,110 @@ class _AuthRingPainter extends CustomPainter {
   }
 }
 
-class _SectionTabs extends StatelessWidget {
-  const _SectionTabs({required this.activeIndex, required this.onChanged});
+const _moduleOptions = [
+  (Icons.compare_arrows, 'Comparador'),
+  (Icons.inventory_2, 'Registrar compra'),
+  (Icons.list_alt, 'Compras guardadas'),
+  (Icons.fact_check, 'Viabilidad AliExpress'),
+  (Icons.table_rows, 'Viabilidades guardadas'),
+  (Icons.warehouse, 'Registrar inventario'),
+  (Icons.point_of_sale, 'Registrar ventas'),
+];
+
+class _ModuleSelector extends StatefulWidget {
+  const _ModuleSelector({required this.activeIndex, required this.onChanged});
 
   final int activeIndex;
   final ValueChanged<int> onChanged;
 
   @override
+  State<_ModuleSelector> createState() => _ModuleSelectorState();
+}
+
+class _ModuleSelectorState extends State<_ModuleSelector> {
+  final _searchController = TextEditingController();
+  bool _open = false;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    const tabs = [
-      (Icons.compare_arrows, 'Comparador'),
-      (Icons.inventory_2, 'Registrar compra'),
-      (Icons.list_alt, 'Compras guardadas'),
-      (Icons.fact_check, 'Viabilidad AliExpress'),
-      (Icons.table_rows, 'Viabilidades guardadas'),
+    final active = _moduleOptions[widget.activeIndex];
+    final query = _searchController.text;
+    final filtered = [
+      for (var i = 0; i < _moduleOptions.length; i++)
+        if (_smartMatches(query, [_moduleOptions[i].$2])) i,
     ];
 
     return Container(
-      padding: const EdgeInsets.all(6),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: _CyberColors.card.withValues(alpha: 0.75),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: _CyberColors.border),
       ),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          for (var index = 0; index < tabs.length; index++)
-            _SectionTabButton(
-              icon: tabs[index].$1,
-              label: tabs[index].$2,
-              selected: activeIndex == index,
-              onTap: () => onChanged(index),
+          InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () => setState(() => _open = !_open),
+            child: Row(
+              children: [
+                Icon(active.$1, color: _CyberColors.primary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    active.$2,
+                    style: const TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                ),
+                Icon(_open ? Icons.expand_less : Icons.expand_more),
+              ],
             ),
+          ),
+          if (_open) ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: _searchController,
+              onChanged: (_) => setState(() {}),
+              style: const TextStyle(color: _CyberColors.textPrimary),
+              decoration: _inputDecoration(
+                label: 'Buscar modulo',
+                hint: 'Ej: compra, venta, inventario...',
+                icon: Icons.search,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final index in filtered)
+                  _ModuleOptionButton(
+                    icon: _moduleOptions[index].$1,
+                    label: _moduleOptions[index].$2,
+                    selected: widget.activeIndex == index,
+                    onTap: () {
+                      widget.onChanged(index);
+                      setState(() => _open = false);
+                    },
+                  ),
+              ],
+            ),
+          ],
         ],
       ),
     );
   }
 }
 
-class _SectionTabButton extends StatelessWidget {
-  const _SectionTabButton({
+class _ModuleOptionButton extends StatelessWidget {
+  const _ModuleOptionButton({
     required this.icon,
     required this.label,
     required this.selected,
@@ -2656,6 +2822,484 @@ class _SavedViabilitiesSection extends StatelessWidget {
   }
 }
 
+class _InventorySection extends StatefulWidget {
+  const _InventorySection({
+    required this.items,
+    required this.message,
+    required this.onSave,
+    required this.onDelete,
+  });
+
+  final List<InventoryItemRecord> items;
+  final String? message;
+  final Future<bool> Function(InventoryItemDraft draft) onSave;
+  final ValueChanged<int> onDelete;
+
+  @override
+  State<_InventorySection> createState() => _InventorySectionState();
+}
+
+class _InventorySectionState extends State<_InventorySection> {
+  final _controllers = {
+    'productName': TextEditingController(),
+    'unitPurchaseValue': TextEditingController(),
+    'quantity': TextEditingController(),
+    'publicSaleValue': TextEditingController(),
+    'loadedAt': TextEditingController(),
+    'warehouse': TextEditingController(),
+  };
+  final _searchController = TextEditingController();
+  final _errors = <String, String>{};
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controllers['loadedAt']!.text = DateTime.now()
+        .toIso8601String()
+        .split('T')
+        .first;
+    _searchController.addListener(() => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    for (final controller in _controllers.values) {
+      controller.dispose();
+    }
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lowStock = widget.items.where((item) => item.quantity < 3).toList();
+    final filtered = widget.items.where((item) {
+      return _smartMatches(_searchController.text, [
+        item.productName,
+        item.warehouse,
+      ]);
+    }).toList();
+    return Container(
+      padding: const EdgeInsets.all(22),
+      decoration: _cyberPanelDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _SectionTitle(number: '07', title: 'Registrar inventario'),
+          const SizedBox(height: 18),
+          if (lowStock.isNotEmpty) ...[
+            _StockAlert(items: lowStock),
+            const SizedBox(height: 14),
+          ],
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = constraints.maxWidth >= 900 ? 3 : 1;
+              return GridView.count(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                crossAxisCount: columns,
+                mainAxisSpacing: 12,
+                crossAxisSpacing: 12,
+                childAspectRatio: columns == 1 ? 5.4 : 3.2,
+                children: [
+                  _inventoryField('productName', 'Nombre del producto'),
+                  _inventoryField('unitPurchaseValue', 'Costo unitario compra'),
+                  _inventoryField('quantity', 'Cantidad ingresada'),
+                  _inventoryField('publicSaleValue', 'Precio venta publico'),
+                  _inventoryField('loadedAt', 'Fecha de carga'),
+                  _inventoryField('warehouse', 'Bodega'),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: _saving ? null : _submit,
+            icon: Icon(_saving ? Icons.sync : Icons.save),
+            label: const Text('Guardar inventario'),
+          ),
+          if (widget.message != null) ...[
+            const SizedBox(height: 12),
+            _PurchaseMessage(message: widget.message!),
+          ],
+          const SizedBox(height: 22),
+          _ListSearchBox(
+            controller: _searchController,
+            label: 'Buscar inventario',
+            total: widget.items.length,
+            filtered: filtered.length,
+          ),
+          const SizedBox(height: 12),
+          if (filtered.isEmpty)
+            const Text(
+              'Aun no hay inventario registrado.',
+              style: TextStyle(color: _CyberColors.textSecondary),
+            )
+          else
+            ...filtered.map(
+              (item) => _InventoryRow(item: item, onDelete: widget.onDelete),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _inventoryField(String key, String label) {
+    final isText =
+        key == 'productName' || key == 'loadedAt' || key == 'warehouse';
+    return TextField(
+      controller: _controllers[key],
+      keyboardType: isText
+          ? TextInputType.text
+          : const TextInputType.numberWithOptions(decimal: true),
+      style: const TextStyle(color: _CyberColors.textPrimary),
+      decoration: _inputDecoration(
+        label: label,
+        hint: key == 'loadedAt' ? 'YYYY-MM-DD' : '',
+        icon: isText ? Icons.notes : Icons.calculate,
+        errorText: _errors[key],
+      ),
+    );
+  }
+
+  Future<void> _submit() async {
+    final errors = <String, String>{};
+    for (final entry in _controllers.entries) {
+      if (entry.value.text.trim().isEmpty) {
+        errors[entry.key] = 'Debes ingresar este dato.';
+      }
+    }
+    for (final key in ['unitPurchaseValue', 'quantity', 'publicSaleValue']) {
+      if (parseLocalizedNumber(_controllers[key]!.text) <= 0) {
+        errors[key] = 'Debe ser mayor que 0.';
+      }
+    }
+    if (errors.isNotEmpty) {
+      setState(
+        () => _errors
+          ..clear()
+          ..addAll(errors),
+      );
+      return;
+    }
+    setState(() {
+      _errors.clear();
+      _saving = true;
+    });
+    final saved = await widget.onSave(
+      InventoryItemDraft(
+        productName: _controllers['productName']!.text.trim(),
+        unitPurchaseValue: parseLocalizedNumber(
+          _controllers['unitPurchaseValue']!.text,
+        ),
+        quantity: parseLocalizedNumber(_controllers['quantity']!.text),
+        publicSaleValue: parseLocalizedNumber(
+          _controllers['publicSaleValue']!.text,
+        ),
+        loadedAt: _controllers['loadedAt']!.text.trim(),
+        warehouse: _controllers['warehouse']!.text.trim(),
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _saving = false);
+    if (saved) {
+      _controllers['productName']!.clear();
+      _controllers['unitPurchaseValue']!.clear();
+      _controllers['quantity']!.clear();
+      _controllers['publicSaleValue']!.clear();
+      _controllers['warehouse']!.clear();
+    }
+  }
+}
+
+class _InventoryRow extends StatelessWidget {
+  const _InventoryRow({required this.item, required this.onDelete});
+
+  final InventoryItemRecord item;
+  final ValueChanged<int> onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: _fieldDecoration(),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              '${item.productName} | ${item.warehouse} | Stock: ${_formatInputNumber(item.quantity)} | Venta: ${formatCop(item.publicSaleValue.round())}',
+              style: TextStyle(
+                color: item.quantity < 3
+                    ? _CyberColors.accent
+                    : _CyberColors.textPrimary,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Eliminar',
+            onPressed: () => onDelete(item.id),
+            icon: const Icon(Icons.delete, color: _CyberColors.accent),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SalesSection extends StatefulWidget {
+  const _SalesSection({
+    required this.inventoryItems,
+    required this.sales,
+    required this.message,
+    required this.onSave,
+  });
+
+  final List<InventoryItemRecord> inventoryItems;
+  final List<SaleRecord> sales;
+  final String? message;
+  final Future<bool> Function(SaleDraft draft) onSave;
+
+  @override
+  State<_SalesSection> createState() => _SalesSectionState();
+}
+
+class _SalesSectionState extends State<_SalesSection> {
+  final _searchController = TextEditingController();
+  final _dateController = TextEditingController();
+  final _quantityController = TextEditingController(text: '1');
+  final _priceController = TextEditingController();
+  InventoryItemRecord? _selectedItem;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _dateController.text = DateTime.now().toIso8601String().split('T').first;
+    _searchController.addListener(() => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _dateController.dispose();
+    _quantityController.dispose();
+    _priceController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final available = widget.inventoryItems
+        .where((item) => item.quantity > 0)
+        .toList();
+    final filteredItems = available
+        .where(
+          (item) => _smartMatches(_searchController.text, [
+            item.productName,
+            item.warehouse,
+          ]),
+        )
+        .toList();
+    final filteredSales = widget.sales
+        .where(
+          (sale) => _smartMatches(_searchController.text, [
+            sale.productName,
+            sale.warehouse,
+          ]),
+        )
+        .toList();
+    final lowStock = widget.inventoryItems
+        .where((item) => item.quantity < 3)
+        .toList();
+    return Container(
+      padding: const EdgeInsets.all(22),
+      decoration: _cyberPanelDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _SectionTitle(number: '08', title: 'Registrar ventas'),
+          const SizedBox(height: 18),
+          if (lowStock.isNotEmpty) ...[
+            _StockAlert(items: lowStock),
+            const SizedBox(height: 14),
+          ],
+          _ListSearchBox(
+            controller: _searchController,
+            label: 'Buscar producto o venta',
+            total: available.length,
+            filtered: filteredItems.length,
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<InventoryItemRecord>(
+            initialValue: _selectedItem,
+            dropdownColor: _CyberColors.card,
+            decoration: _inputDecoration(
+              label: 'Producto y bodega',
+              hint: '',
+              icon: Icons.inventory,
+            ),
+            items: filteredItems
+                .map(
+                  (item) => DropdownMenuItem(
+                    value: item,
+                    child: Text(
+                      '${item.productName} | ${item.warehouse} | ${_formatInputNumber(item.quantity)} und',
+                    ),
+                  ),
+                )
+                .toList(),
+            onChanged: (item) {
+              setState(() {
+                _selectedItem = item;
+                if (item != null) {
+                  _priceController.text = _formatInputNumber(
+                    item.publicSaleValue,
+                  );
+                }
+              });
+            },
+          ),
+          const SizedBox(height: 12),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = constraints.maxWidth >= 900 ? 3 : 1;
+              return GridView.count(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                crossAxisCount: columns,
+                mainAxisSpacing: 12,
+                crossAxisSpacing: 12,
+                childAspectRatio: columns == 1 ? 5.4 : 3.2,
+                children: [
+                  _saleField(
+                    _dateController,
+                    'Fecha de venta',
+                    Icons.event,
+                    true,
+                  ),
+                  _saleField(
+                    _quantityController,
+                    'Cantidad vendida',
+                    Icons.numbers,
+                    false,
+                  ),
+                  _saleField(
+                    _priceController,
+                    'Precio unitario venta',
+                    Icons.payments,
+                    false,
+                  ),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: _saving ? null : _submit,
+            icon: Icon(_saving ? Icons.sync : Icons.point_of_sale),
+            label: const Text('Registrar venta'),
+          ),
+          if (widget.message != null) ...[
+            const SizedBox(height: 12),
+            _PurchaseMessage(message: widget.message!),
+          ],
+          const SizedBox(height: 22),
+          if (filteredSales.isEmpty)
+            const Text(
+              'Aun no hay ventas registradas.',
+              style: TextStyle(color: _CyberColors.textSecondary),
+            )
+          else
+            ...filteredSales.map(
+              (sale) => Container(
+                margin: const EdgeInsets.only(bottom: 10),
+                padding: const EdgeInsets.all(14),
+                decoration: _fieldDecoration(),
+                child: Text(
+                  '${sale.soldAt} | ${sale.productName} | ${sale.warehouse} | ${_formatInputNumber(sale.quantity)} und | Total ${formatCop(sale.totalSaleValue.round())}',
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _saleField(
+    TextEditingController controller,
+    String label,
+    IconData icon,
+    bool text,
+  ) {
+    return TextField(
+      controller: controller,
+      keyboardType: text
+          ? TextInputType.text
+          : const TextInputType.numberWithOptions(decimal: true),
+      style: const TextStyle(color: _CyberColors.textPrimary),
+      decoration: _inputDecoration(
+        label: label,
+        hint: text ? 'YYYY-MM-DD' : '',
+        icon: icon,
+      ),
+    );
+  }
+
+  Future<void> _submit() async {
+    final item = _selectedItem;
+    if (item == null) return;
+    setState(() => _saving = true);
+    final saved = await widget.onSave(
+      SaleDraft(
+        inventoryItemId: item.id,
+        soldAt: _dateController.text.trim(),
+        quantity: parseLocalizedNumber(_quantityController.text),
+        unitSaleValue: parseLocalizedNumber(_priceController.text),
+      ),
+    );
+    if (!mounted) return;
+    setState(() {
+      _saving = false;
+      if (saved) _selectedItem = null;
+    });
+  }
+}
+
+class _StockAlert extends StatelessWidget {
+  const _StockAlert({required this.items});
+
+  final List<InventoryItemRecord> items;
+
+  @override
+  Widget build(BuildContext context) {
+    final names = items
+        .take(4)
+        .map(
+          (item) =>
+              '${item.productName} (${_formatInputNumber(item.quantity)})',
+        )
+        .join(', ');
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _CyberColors.accent.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _CyberColors.accent),
+      ),
+      child: Text(
+        'Alerta de inventario bajo: $names',
+        style: const TextStyle(
+          color: _CyberColors.accent,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+    );
+  }
+}
+
 class _ViabilitiesList extends StatefulWidget {
   const _ViabilitiesList({
     required this.records,
@@ -3619,6 +4263,179 @@ class AliExpressViabilityRecord {
       updatedAt: json['updatedAt'] as String? ?? '',
     );
   }
+}
+
+class InventoryItemDraft {
+  const InventoryItemDraft({
+    required this.productName,
+    required this.unitPurchaseValue,
+    required this.quantity,
+    required this.publicSaleValue,
+    required this.loadedAt,
+    required this.warehouse,
+  });
+
+  final String productName;
+  final double unitPurchaseValue;
+  final double quantity;
+  final double publicSaleValue;
+  final String loadedAt;
+  final String warehouse;
+
+  Map<String, dynamic> toJson() {
+    return {
+      'productName': productName,
+      'unitPurchaseValue': unitPurchaseValue,
+      'quantity': quantity,
+      'publicSaleValue': publicSaleValue,
+      'loadedAt': loadedAt,
+      'warehouse': warehouse,
+    };
+  }
+
+  factory InventoryItemDraft.fromJson(Map<String, dynamic> json) {
+    double number(String key) => (json[key] as num? ?? 0).toDouble();
+    return InventoryItemDraft(
+      productName: json['productName'] as String? ?? '',
+      unitPurchaseValue: number('unitPurchaseValue'),
+      quantity: number('quantity'),
+      publicSaleValue: number('publicSaleValue'),
+      loadedAt: json['loadedAt'] as String? ?? '',
+      warehouse: json['warehouse'] as String? ?? '',
+    );
+  }
+}
+
+class InventoryItemRecord {
+  const InventoryItemRecord({
+    required this.id,
+    required this.draft,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final int id;
+  final InventoryItemDraft draft;
+  final String createdAt;
+  final String updatedAt;
+
+  String get productName => draft.productName;
+  double get unitPurchaseValue => draft.unitPurchaseValue;
+  double get quantity => draft.quantity;
+  double get publicSaleValue => draft.publicSaleValue;
+  String get loadedAt => draft.loadedAt;
+  String get warehouse => draft.warehouse;
+
+  factory InventoryItemRecord.fromDraft(int id, InventoryItemDraft draft) {
+    final now = DateTime.now().toIso8601String();
+    return InventoryItemRecord(
+      id: id,
+      draft: draft,
+      createdAt: now,
+      updatedAt: now,
+    );
+  }
+
+  factory InventoryItemRecord.fromJson(Map<String, dynamic> json) {
+    return InventoryItemRecord(
+      id: (json['id'] as num? ?? 0).round(),
+      draft: InventoryItemDraft.fromJson(json),
+      createdAt: json['createdAt'] as String? ?? '',
+      updatedAt: json['updatedAt'] as String? ?? '',
+    );
+  }
+}
+
+class SaleDraft {
+  const SaleDraft({
+    required this.inventoryItemId,
+    required this.soldAt,
+    required this.quantity,
+    required this.unitSaleValue,
+  });
+
+  final int inventoryItemId;
+  final String soldAt;
+  final double quantity;
+  final double unitSaleValue;
+
+  Map<String, dynamic> toJson() {
+    return {
+      'inventoryItemId': inventoryItemId,
+      'soldAt': soldAt,
+      'quantity': quantity,
+      'unitSaleValue': unitSaleValue,
+    };
+  }
+}
+
+class SaleRecord {
+  const SaleRecord({
+    required this.id,
+    required this.inventoryItemId,
+    required this.productName,
+    required this.warehouse,
+    required this.soldAt,
+    required this.quantity,
+    required this.unitSaleValue,
+    required this.totalSaleValue,
+    required this.remainingQuantity,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final int id;
+  final int inventoryItemId;
+  final String productName;
+  final String warehouse;
+  final String soldAt;
+  final double quantity;
+  final double unitSaleValue;
+  final double totalSaleValue;
+  final double remainingQuantity;
+  final String createdAt;
+  final String updatedAt;
+
+  factory SaleRecord.fromDraft(int id, SaleDraft draft) {
+    final now = DateTime.now().toIso8601String();
+    return SaleRecord(
+      id: id,
+      inventoryItemId: draft.inventoryItemId,
+      productName: '',
+      warehouse: '',
+      soldAt: draft.soldAt,
+      quantity: draft.quantity,
+      unitSaleValue: draft.unitSaleValue,
+      totalSaleValue: draft.quantity * draft.unitSaleValue,
+      remainingQuantity: 0,
+      createdAt: now,
+      updatedAt: now,
+    );
+  }
+
+  factory SaleRecord.fromJson(Map<String, dynamic> json) {
+    double number(String key) => (json[key] as num? ?? 0).toDouble();
+    return SaleRecord(
+      id: (json['id'] as num? ?? 0).round(),
+      inventoryItemId: (json['inventoryItemId'] as num? ?? 0).round(),
+      productName: json['productName'] as String? ?? '',
+      warehouse: json['warehouse'] as String? ?? '',
+      soldAt: json['soldAt'] as String? ?? '',
+      quantity: number('quantity'),
+      unitSaleValue: number('unitSaleValue'),
+      totalSaleValue: number('totalSaleValue'),
+      remainingQuantity: number('remainingQuantity'),
+      createdAt: json['createdAt'] as String? ?? '',
+      updatedAt: json['updatedAt'] as String? ?? '',
+    );
+  }
+}
+
+class SaleSaveResult {
+  const SaleSaveResult({required this.sale, required this.lowStock});
+
+  final SaleRecord sale;
+  final bool lowStock;
 }
 
 class ProductResult {

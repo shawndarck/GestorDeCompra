@@ -9,6 +9,8 @@ PriceSec es una app Flutter Web local para:
 - Registrar compras/importaciones con calculos basados en Excel.
 - Guardar, listar, editar y eliminar registros de compra.
 - Registrar analisis de viabilidad AliExpress desde una seccion independiente.
+- Registrar inventario por producto y bodega.
+- Registrar ventas descontando inventario automaticamente.
 - Buscar y paginar registros guardados para evitar listas infinitas.
 - Proteger la app con login, registro inicial de super admin y recuperacion de contraseña.
 - Consultar automaticamente la TRM USD -> COP desde una API gratuita.
@@ -95,6 +97,11 @@ Este proceso debe quedarse abierto. Sirve:
 - `POST /aliexpress-viabilities`
 - `PUT /aliexpress-viabilities/:id`
 - `DELETE /aliexpress-viabilities/:id`
+- `GET /inventory`
+- `POST /inventory`
+- `DELETE /inventory/:id`
+- `GET /sales`
+- `POST /sales`
 - `POST /search`
 
 5. En otra terminal, inicia Flutter Web:
@@ -423,6 +430,36 @@ El respaldo local de esta seccion usa otra llave para no mezclar datos con compr
 pricesec_aliexpress_viability_backup
 ```
 
+## Inventario
+
+El modulo `Registrar inventario` permite cargar stock por producto y bodega.
+
+Campos obligatorios:
+
+- Nombre del producto.
+- Costo unitario compra.
+- Cantidad ingresada.
+- Precio venta publico.
+- Fecha de carga.
+- Bodega.
+
+El listado del modulo tiene busqueda inteligente por producto o bodega. Si un producto queda con menos de 3 unidades, PriceSec muestra una alerta de inventario bajo.
+
+## Ventas
+
+El modulo `Registrar ventas` coteja contra la tabla de inventario.
+
+Flujo:
+
+1. Buscar producto o bodega.
+2. Seleccionar el producto disponible desde el desplegable.
+3. Ingresar fecha de venta.
+4. Ingresar cantidad vendida.
+5. Confirmar precio unitario de venta.
+6. Guardar la venta.
+
+Al guardar, el backend descuenta la cantidad vendida del inventario seleccionado. Si quedan menos de 3 unidades, el sistema notifica la alerta de bajo stock.
+
 ## Base De Datos
 
 SQLite se crea automaticamente en:
@@ -440,6 +477,8 @@ password_reset_codes
 auth_email_outbox
 purchases
 aliexpress_viabilities
+inventory_items
+sales
 ```
 
 El archivo `pricesec.db` esta ignorado por Git para no mezclar datos locales con codigo.

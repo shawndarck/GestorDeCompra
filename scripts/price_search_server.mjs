@@ -133,6 +133,35 @@ db.exec(`
   )
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS inventory_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_name TEXT NOT NULL,
+    unit_purchase_value REAL NOT NULL DEFAULT 0,
+    quantity REAL NOT NULL DEFAULT 0,
+    public_sale_value REAL NOT NULL DEFAULT 0,
+    loaded_at TEXT NOT NULL,
+    warehouse TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS sales (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    inventory_item_id INTEGER NOT NULL,
+    product_name TEXT NOT NULL,
+    warehouse TEXT NOT NULL,
+    sold_at TEXT NOT NULL,
+    quantity REAL NOT NULL DEFAULT 0,
+    unit_sale_value REAL NOT NULL DEFAULT 0,
+    total_sale_value REAL NOT NULL DEFAULT 0,
+    remaining_quantity REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (inventory_item_id) REFERENCES inventory_items(id)
+  )
+`);
+
 function json(res, status, body) {
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
@@ -957,6 +986,147 @@ function removeAliExpressViability(id) {
   db.prepare('DELETE FROM aliexpress_viabilities WHERE id = ?').run(id);
 }
 
+function normalizeInventoryItem(input) {
+  return {
+    productName: String(input.productName ?? '').trim(),
+    unitPurchaseValue: number(input.unitPurchaseValue),
+    quantity: number(input.quantity),
+    publicSaleValue: number(input.publicSaleValue),
+    loadedAt: String(input.loadedAt ?? '').trim(),
+    warehouse: String(input.warehouse ?? '').trim(),
+  };
+}
+
+function inventoryItemFromRow(row) {
+  return {
+    id: row.id,
+    productName: row.product_name,
+    unitPurchaseValue: row.unit_purchase_value,
+    quantity: row.quantity,
+    publicSaleValue: row.public_sale_value,
+    loadedAt: row.loaded_at,
+    warehouse: row.warehouse,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function listInventoryItems() {
+  return db
+    .prepare('SELECT * FROM inventory_items ORDER BY updated_at DESC, id DESC')
+    .all()
+    .map(inventoryItemFromRow);
+}
+
+function createInventoryItem(input) {
+  const item = normalizeInventoryItem(input);
+  if (!item.productName) throw new Error('El nombre del producto es obligatorio.');
+  if (!item.warehouse) throw new Error('La bodega es obligatoria.');
+  if (!item.loadedAt) throw new Error('La fecha de carga es obligatoria.');
+  if (item.unitPurchaseValue <= 0 || item.quantity <= 0 || item.publicSaleValue <= 0) {
+    throw new Error('Los valores numericos deben ser mayores que 0.');
+  }
+  const result = db
+    .prepare(
+      `
+        INSERT INTO inventory_items (
+          product_name, unit_purchase_value, quantity, public_sale_value,
+          loaded_at, warehouse
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `,
+    )
+    .run(
+      item.productName,
+      item.unitPurchaseValue,
+      item.quantity,
+      item.publicSaleValue,
+      item.loadedAt,
+      item.warehouse,
+    );
+  return getInventoryItem(Number(result.lastInsertRowid));
+}
+
+function getInventoryItem(id) {
+  const row = db.prepare('SELECT * FROM inventory_items WHERE id = ?').get(id);
+  if (!row) throw new Error('Producto de inventario no encontrado.');
+  return inventoryItemFromRow(row);
+}
+
+function removeInventoryItem(id) {
+  db.prepare('DELETE FROM inventory_items WHERE id = ?').run(id);
+}
+
+function saleFromRow(row) {
+  return {
+    id: row.id,
+    inventoryItemId: row.inventory_item_id,
+    productName: row.product_name,
+    warehouse: row.warehouse,
+    soldAt: row.sold_at,
+    quantity: row.quantity,
+    unitSaleValue: row.unit_sale_value,
+    totalSaleValue: row.total_sale_value,
+    remainingQuantity: row.remaining_quantity,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function listSales() {
+  return db.prepare('SELECT * FROM sales ORDER BY sold_at DESC, id DESC').all().map(saleFromRow);
+}
+
+function createSale(input) {
+  const inventoryItemId = Number(input.inventoryItemId ?? 0);
+  const soldAt = String(input.soldAt ?? '').trim();
+  const quantity = number(input.quantity);
+  const unitSaleValue = number(input.unitSaleValue);
+  if (!inventoryItemId) throw new Error('Selecciona un producto del inventario.');
+  if (!soldAt) throw new Error('La fecha de venta es obligatoria.');
+  if (quantity <= 0 || unitSaleValue <= 0) throw new Error('Cantidad y precio deben ser mayores que 0.');
+
+  const item = getInventoryItem(inventoryItemId);
+  if (quantity > item.quantity) throw new Error('No hay suficiente inventario en esa bodega.');
+  const remaining = item.quantity - quantity;
+  const total = quantity * unitSaleValue;
+
+  db.exec('BEGIN');
+  try {
+    db.prepare(
+      'UPDATE inventory_items SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+    ).run(remaining, inventoryItemId);
+    const result = db
+      .prepare(
+        `
+          INSERT INTO sales (
+            inventory_item_id, product_name, warehouse, sold_at, quantity,
+            unit_sale_value, total_sale_value, remaining_quantity
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      )
+      .run(
+        item.id,
+        item.productName,
+        item.warehouse,
+        soldAt,
+        quantity,
+        unitSaleValue,
+        total,
+        remaining,
+      );
+    db.exec('COMMIT');
+    return {
+      sale: db
+        .prepare('SELECT * FROM sales WHERE id = ?')
+        .get(Number(result.lastInsertRowid)),
+      lowStock: remaining < 3,
+    };
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') return json(res, 200, {});
   if (req.url === '/health') return json(res, 200, { ok: true });
@@ -1063,6 +1233,35 @@ const server = http.createServer(async (req, res) => {
   if (viabilityMatch && req.method === 'DELETE') {
     removeAliExpressViability(Number(viabilityMatch[1]));
     return json(res, 200, { ok: true });
+  }
+  if (req.url === '/inventory' && req.method === 'GET') {
+    return json(res, 200, { items: listInventoryItems() });
+  }
+  if (req.url === '/inventory' && req.method === 'POST') {
+    try {
+      return json(res, 200, { item: createInventoryItem(await readJson(req)) });
+    } catch (error) {
+      return json(res, 400, { message: error?.message ?? 'No pude guardar inventario.' });
+    }
+  }
+  const inventoryMatch = req.url.match(/^\/inventory\/(\d+)$/);
+  if (inventoryMatch && req.method === 'DELETE') {
+    removeInventoryItem(Number(inventoryMatch[1]));
+    return json(res, 200, { ok: true });
+  }
+  if (req.url === '/sales' && req.method === 'GET') {
+    return json(res, 200, { sales: listSales() });
+  }
+  if (req.url === '/sales' && req.method === 'POST') {
+    try {
+      const created = createSale(await readJson(req));
+      return json(res, 200, {
+        sale: saleFromRow(created.sale),
+        lowStock: created.lowStock,
+      });
+    } catch (error) {
+      return json(res, 400, { message: error?.message ?? 'No pude registrar la venta.' });
+    }
   }
   if (req.url !== '/search' || req.method !== 'POST') {
     return json(res, 404, { message: 'Ruta no encontrada.' });

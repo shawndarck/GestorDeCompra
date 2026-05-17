@@ -82,4 +82,24 @@ Future<AliExpressViabilityRecord> saveAliExpressViability(
 
 Future<void> deleteAliExpressViability(int id) async {}
 
+Future<List<InventoryItemRecord>> loadInventoryItems() async => const [];
+
+Future<InventoryItemRecord> saveInventoryItem(InventoryItemDraft draft) async {
+  return InventoryItemRecord.fromDraft(
+    DateTime.now().millisecondsSinceEpoch,
+    draft,
+  );
+}
+
+Future<void> deleteInventoryItem(int id) async {}
+
+Future<List<SaleRecord>> loadSales() async => const [];
+
+Future<SaleSaveResult> saveSale(SaleDraft draft) async {
+  return SaleSaveResult(
+    sale: SaleRecord.fromDraft(DateTime.now().millisecondsSinceEpoch, draft),
+    lowStock: false,
+  );
+}
+
 Future<double?> fetchCurrentTrm() async => null;
