@@ -344,6 +344,7 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
       7 => user.isSuperAdmin,
       8 => user.can('manage_collaborators'),
       9 => user.can('manage_stores'),
+      10 => user.can('view_inventory'),
       _ => false,
     };
   }
@@ -521,6 +522,8 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
                           message: _salesMessage,
                           onSave: _saveSale,
                         )
+                      else if (_activeTab == 10)
+                        _InventorySummarySection(items: _inventoryItems)
                       else if (_activeTab == 7)
                         _PrincipalUsersSection(
                           users: _principalUsers,
@@ -634,6 +637,14 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
         _statusMessage = error.message;
         _isRunning = false;
       });
+    } catch (error) {
+      setState(() {
+        _results = const [];
+        _bestResult = null;
+        _statusMessage =
+            'No pude completar la comparacion. Verifica tu sesion y el backend local.';
+        _isRunning = false;
+      });
     }
   }
 
@@ -660,6 +671,7 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
       _loadInventoryItems();
       _loadSales();
     }
+    if (index == 10) _loadInventoryItems();
     if (index == 7) _loadPrincipalUsers();
     if (index == 8) _loadCollaboratorPanel();
     if (index == 9) _loadMercadoLibreStores();
@@ -1676,6 +1688,7 @@ const _moduleOptions = [
   _ModuleOption(4, Icons.table_rows, 'Viabilidades guardadas'),
   _ModuleOption(5, Icons.warehouse, 'Registrar inventario'),
   _ModuleOption(6, Icons.point_of_sale, 'Registrar ventas'),
+  _ModuleOption(10, Icons.inventory, 'Inventario general'),
   _ModuleOption(7, Icons.admin_panel_settings, 'Usuarios principales'),
   _ModuleOption(8, Icons.group_add, 'Colaboradores'),
   _ModuleOption(9, Icons.storefront, 'Tiendas Mercado Libre'),
@@ -3956,10 +3969,17 @@ class _InventorySectionState extends State<_InventorySection> {
   @override
   Widget build(BuildContext context) {
     final lowStock = widget.items.where((item) => item.quantity < 3).toList();
+    final productNames = _uniqueInventoryValues(
+      widget.items.map((item) => item.productName),
+    );
+    final warehouses = _uniqueInventoryValues(
+      widget.items.map((item) => item.warehouse),
+    );
     final filtered = widget.items.where((item) {
       return _smartMatches(_searchController.text, [
         item.productName,
         item.warehouse,
+        item.createdByUsername,
       ]);
     }).toList();
     return Container(
@@ -3985,12 +4005,22 @@ class _InventorySectionState extends State<_InventorySection> {
                 crossAxisSpacing: 12,
                 childAspectRatio: columns == 1 ? 5.4 : 3.2,
                 children: [
-                  _inventoryField('productName', 'Nombre del producto'),
+                  _suggestedInventoryField(
+                    'productName',
+                    'Nombre del producto',
+                    productNames,
+                    Icons.inventory_2,
+                  ),
                   _inventoryField('unitPurchaseValue', 'Costo unitario compra'),
                   _inventoryField('quantity', 'Cantidad ingresada'),
                   _inventoryField('publicSaleValue', 'Precio venta publico'),
                   _inventoryField('loadedAt', 'Fecha de carga'),
-                  _inventoryField('warehouse', 'Bodega'),
+                  _suggestedInventoryField(
+                    'warehouse',
+                    'Bodega',
+                    warehouses,
+                    Icons.warehouse,
+                  ),
                 ],
               );
             },
@@ -4008,7 +4038,7 @@ class _InventorySectionState extends State<_InventorySection> {
           const SizedBox(height: 22),
           _ListSearchBox(
             controller: _searchController,
-            label: 'Buscar inventario',
+            label: 'Buscar movimientos de inventario',
             total: widget.items.length,
             filtered: filtered.length,
           ),
@@ -4019,12 +4049,39 @@ class _InventorySectionState extends State<_InventorySection> {
               style: TextStyle(color: _CyberColors.textSecondary),
             )
           else
+            ...[
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text(
+                  'Historial de movimientos',
+                  style: TextStyle(
+                    color: _isNeoSkin
+                        ? _NeoColors.textPrimary
+                        : _CyberColors.textPrimary,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
             ...filtered.map(
               (item) => _InventoryRow(item: item, onDelete: widget.onDelete),
             ),
         ],
       ),
     );
+  }
+
+  List<String> _uniqueInventoryValues(Iterable<String> values) {
+    final seen = <String>{};
+    final result = <String>[];
+    for (final raw in values) {
+      final value = raw.trim();
+      if (value.isEmpty) continue;
+      final key = _normalizeSearchText(value);
+      if (seen.add(key)) result.add(value);
+    }
+    result.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return result;
   }
 
   Widget _inventoryField(String key, String label) {
@@ -4042,6 +4099,70 @@ class _InventorySectionState extends State<_InventorySection> {
         icon: isText ? Icons.notes : Icons.calculate,
         errorText: _errors[key],
       ),
+    );
+  }
+
+  Widget _suggestedInventoryField(
+    String key,
+    String label,
+    List<String> options,
+    IconData icon,
+  ) {
+    return Autocomplete<String>(
+      initialValue: TextEditingValue(text: _controllers[key]!.text),
+      optionsBuilder: (value) {
+        final query = value.text.trim();
+        if (query.isEmpty) return options.take(8);
+        return options.where((option) => _smartMatches(query, [option])).take(8);
+      },
+      onSelected: (value) => _controllers[key]!.text = value,
+      fieldViewBuilder:
+          (context, textEditingController, focusNode, onFieldSubmitted) {
+        if (textEditingController.text != _controllers[key]!.text) {
+          textEditingController.text = _controllers[key]!.text;
+        }
+        return TextField(
+          controller: textEditingController,
+          focusNode: focusNode,
+          onChanged: (value) => _controllers[key]!.text = value,
+          style: const TextStyle(color: _CyberColors.textPrimary),
+          decoration: _inputDecoration(
+            label: label,
+            hint: options.isEmpty ? 'Escribe uno nuevo' : 'Busca o escribe uno nuevo',
+            icon: icon,
+            errorText: _errors[key],
+          ),
+        );
+      },
+      optionsViewBuilder: (context, onSelected, visibleOptions) {
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              margin: const EdgeInsets.only(top: 6),
+              constraints: const BoxConstraints(maxWidth: 360, maxHeight: 240),
+              decoration: _cyberPanelDecoration(radius: 10),
+              child: ListView.builder(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                shrinkWrap: true,
+                itemCount: visibleOptions.length,
+                itemBuilder: (context, index) {
+                  final option = visibleOptions.elementAt(index);
+                  return ListTile(
+                    dense: true,
+                    title: Text(
+                      option,
+                      style: const TextStyle(color: _CyberColors.textPrimary),
+                    ),
+                    onTap: () => onSelected(option),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -4103,27 +4224,345 @@ class _InventoryRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final addedBy = item.createdByUsername.trim().isEmpty
+        ? 'Usuario no registrado'
+        : item.createdByUsername.trim();
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(14),
       decoration: _fieldDecoration(),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
-            child: Text(
-              '${item.productName} | ${item.warehouse} | Stock: ${_formatInputNumber(item.quantity)} | Venta: ${formatCop(item.publicSaleValue.round())}',
-              style: TextStyle(
-                color: item.quantity < 3
-                    ? _CyberColors.accent
-                    : _CyberColors.textPrimary,
-                fontWeight: FontWeight.w800,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  item.productName,
+                  style: TextStyle(
+                    color: item.quantity < 3
+                        ? _CyberColors.accent
+                        : _CyberColors.textPrimary,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Bodega: ${item.warehouse} | Cantidad: ${_formatInputNumber(item.quantity)} | Compra: ${formatCop(item.unitPurchaseValue.round())} | Venta: ${formatCop(item.publicSaleValue.round())}',
+                  style: const TextStyle(color: _CyberColors.textSecondary),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Movimiento: ${_formatDateTimeLabel(item.createdAt)} | Agregado por: $addedBy | Fecha carga: ${item.loadedAt}',
+                  style: const TextStyle(
+                    color: _CyberColors.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
             ),
           ),
           IconButton(
             tooltip: 'Eliminar',
             onPressed: () => onDelete(item.id),
             icon: const Icon(Icons.delete, color: _CyberColors.accent),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _InventorySummarySection extends StatefulWidget {
+  const _InventorySummarySection({required this.items});
+
+  final List<InventoryItemRecord> items;
+
+  @override
+  State<_InventorySummarySection> createState() =>
+      _InventorySummarySectionState();
+}
+
+class _InventorySummarySectionState extends State<_InventorySummarySection> {
+  final _searchController = TextEditingController();
+  static const _pageSize = 25;
+  int _page = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _searchController.addListener(() => setState(() => _page = 0));
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final grouped = _groupInventory(widget.items);
+    final filtered = grouped.where((item) {
+      return _smartMatches(_searchController.text, [
+        item.productName,
+        item.warehousesLabel,
+      ]);
+    }).toList()
+      ..sort((a, b) => a.productName.compareTo(b.productName));
+    final pageCount = math.max(1, (filtered.length / _pageSize).ceil());
+    if (_page >= pageCount) _page = pageCount - 1;
+    final start = _page * _pageSize;
+    final visible = filtered.skip(start).take(_pageSize).toList();
+    final totalUnits = grouped.fold<double>(
+      0,
+      (sum, item) => sum + item.totalQuantity,
+    );
+
+    return Container(
+      padding: const EdgeInsets.all(22),
+      decoration: _cyberPanelDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _SectionTitle(number: '09', title: 'Inventario general'),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: [
+              _MetricPill(
+                icon: Icons.inventory_2,
+                label: 'Productos agrupados',
+                value: grouped.length.toString(),
+              ),
+              _MetricPill(
+                icon: Icons.warehouse,
+                label: 'Unidades totales',
+                value: _formatInputNumber(totalUnits),
+              ),
+              _MetricPill(
+                icon: Icons.warning_amber,
+                label: 'Agotandose',
+                value: grouped
+                    .where((item) => item.totalQuantity < 3)
+                    .length
+                    .toString(),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          _ListSearchBox(
+            controller: _searchController,
+            label: 'Buscar inventario general',
+            total: grouped.length,
+            filtered: filtered.length,
+          ),
+          const SizedBox(height: 14),
+          if (visible.isEmpty)
+            const Text(
+              'No hay inventario para mostrar.',
+              style: TextStyle(color: _CyberColors.textSecondary),
+            )
+          else
+            ...visible.map((item) => _InventorySummaryRow(item: item)),
+          if (filtered.length > _pageSize)
+            _PaginationControls(
+              page: _page,
+              pageCount: pageCount,
+              totalItems: filtered.length,
+              pageSize: _pageSize,
+              onPrevious: _page == 0 ? null : () => setState(() => _page--),
+              onNext:
+                  _page >= pageCount - 1 ? null : () => setState(() => _page++),
+            ),
+        ],
+      ),
+    );
+  }
+
+  List<_InventoryAggregate> _groupInventory(List<InventoryItemRecord> items) {
+    final map = <String, _InventoryAggregate>{};
+    for (final item in items) {
+      final key = _normalizeSearchText(item.productName);
+      final current = map[key];
+      if (current == null) {
+        map[key] = _InventoryAggregate.fromItem(item);
+      } else {
+        current.add(item);
+      }
+    }
+    return map.values.toList();
+  }
+}
+
+class _InventorySummaryRow extends StatelessWidget {
+  const _InventorySummaryRow({required this.item});
+
+  final _InventoryAggregate item;
+
+  @override
+  Widget build(BuildContext context) {
+    final lowStock = item.totalQuantity < 3;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: _fieldDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  item.productName,
+                  style: TextStyle(
+                    color: lowStock
+                        ? _CyberColors.accent
+                        : _CyberColors.textPrimary,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              Text(
+                '${_formatInputNumber(item.totalQuantity)} und',
+                style: TextStyle(
+                  color: lowStock
+                      ? _CyberColors.accent
+                      : _CyberColors.primary,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Bodegas: ${item.warehousesLabel}',
+            style: const TextStyle(color: _CyberColors.textSecondary),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Compra promedio: ${formatCop(item.averagePurchaseValue.round())} | Venta actual: ${formatCop(item.lastSaleValue.round())} | Movimientos: ${item.movements}',
+            style: const TextStyle(color: _CyberColors.textSecondary),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Ultimo movimiento: ${_formatDateTimeLabel(item.lastMovementAt)} por ${item.lastCreatedBy}',
+            style: const TextStyle(
+              color: _CyberColors.textSecondary,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _InventoryAggregate {
+  _InventoryAggregate({
+    required this.productName,
+    required this.totalQuantity,
+    required this.totalPurchaseValue,
+    required this.lastSaleValue,
+    required this.movements,
+    required this.lastMovementAt,
+    required this.lastCreatedBy,
+    required Map<String, double> warehouses,
+  }) : warehouses = Map<String, double>.from(warehouses);
+
+  final String productName;
+  double totalQuantity;
+  double totalPurchaseValue;
+  double lastSaleValue;
+  int movements;
+  String lastMovementAt;
+  String lastCreatedBy;
+  final Map<String, double> warehouses;
+
+  factory _InventoryAggregate.fromItem(InventoryItemRecord item) {
+    return _InventoryAggregate(
+      productName: item.productName,
+      totalQuantity: item.quantity,
+      totalPurchaseValue: item.unitPurchaseValue * item.quantity,
+      lastSaleValue: item.publicSaleValue,
+      movements: 1,
+      lastMovementAt: item.createdAt,
+      lastCreatedBy: item.createdByUsername.trim().isEmpty
+          ? 'Usuario no registrado'
+          : item.createdByUsername.trim(),
+      warehouses: {item.warehouse: item.quantity},
+    );
+  }
+
+  void add(InventoryItemRecord item) {
+    totalQuantity += item.quantity;
+    totalPurchaseValue += item.unitPurchaseValue * item.quantity;
+    lastSaleValue = item.publicSaleValue;
+    movements++;
+    warehouses[item.warehouse] = (warehouses[item.warehouse] ?? 0) + item.quantity;
+    if (item.createdAt.compareTo(lastMovementAt) >= 0) {
+      lastMovementAt = item.createdAt;
+      lastCreatedBy = item.createdByUsername.trim().isEmpty
+          ? 'Usuario no registrado'
+          : item.createdByUsername.trim();
+    }
+  }
+
+  double get averagePurchaseValue {
+    if (totalQuantity <= 0) return 0;
+    return totalPurchaseValue / totalQuantity;
+  }
+
+  String get warehousesLabel {
+    final entries = warehouses.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    return entries
+        .map((entry) => '${entry.key} (${_formatInputNumber(entry.value)})')
+        .join(', ');
+  }
+}
+
+class _MetricPill extends StatelessWidget {
+  const _MetricPill({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: _fieldDecoration(),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: _CyberColors.primary, size: 20),
+          const SizedBox(width: 10),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                value,
+                style: const TextStyle(
+                  color: _CyberColors.textPrimary,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: _CyberColors.textSecondary,
+                  fontSize: 12,
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -5403,12 +5842,16 @@ class InventoryItemRecord {
     required this.draft,
     required this.createdAt,
     required this.updatedAt,
+    this.createdByUserId,
+    this.createdByUsername = '',
   });
 
   final int id;
   final InventoryItemDraft draft;
   final String createdAt;
   final String updatedAt;
+  final int? createdByUserId;
+  final String createdByUsername;
 
   String get productName => draft.productName;
   double get unitPurchaseValue => draft.unitPurchaseValue;
@@ -5424,6 +5867,7 @@ class InventoryItemRecord {
       draft: draft,
       createdAt: now,
       updatedAt: now,
+      createdByUsername: '',
     );
   }
 
@@ -5433,6 +5877,8 @@ class InventoryItemRecord {
       draft: InventoryItemDraft.fromJson(json),
       createdAt: json['createdAt'] as String? ?? '',
       updatedAt: json['updatedAt'] as String? ?? '',
+      createdByUserId: (json['createdByUserId'] as num?)?.round(),
+      createdByUsername: json['createdByUsername'] as String? ?? '',
     );
   }
 }
@@ -5830,6 +6276,13 @@ String _formatInputNumber(double value) {
       .toStringAsFixed(4)
       .replaceFirst(RegExp(r'0+$'), '')
       .replaceFirst(RegExp(r'\.$'), '');
+}
+
+String _formatDateTimeLabel(String value) {
+  final parsed = DateTime.tryParse(value);
+  if (parsed == null) return value.isEmpty ? 'Sin fecha' : value;
+  String two(int number) => number.toString().padLeft(2, '0');
+  return '${two(parsed.day)}/${two(parsed.month)}/${parsed.year} ${two(parsed.hour)}:${two(parsed.minute)}';
 }
 
 String _formatTrmInput(double value) {

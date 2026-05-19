@@ -1,5 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter, deprecated_member_use
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
 
@@ -18,21 +19,20 @@ Future<List<ProductResult>> searchProducts({
   required String product,
   required SearchFilters filters,
 }) async {
-  final request = await html.HttpRequest.request(
-    'http://localhost:8768/search',
-    method: 'POST',
-    requestHeaders: {'Content-Type': 'application/json'},
-    sendData: jsonEncode({
-      'product': product,
-      'country': fixedMonitorConfig.country,
-      'currency': fixedMonitorConfig.currency,
-      'filters': {
-        'minRating': filters.minRating,
-        'minSales': filters.minSales,
-        'shippingFilter': filters.shippingFilter.name,
-        'stores': filters.stores.map((store) => store.name).toList(),
-      },
-    }),
+  final payload = jsonEncode({
+    'product': product,
+    'country': fixedMonitorConfig.country,
+    'currency': fixedMonitorConfig.currency,
+    'filters': {
+      'minRating': filters.minRating,
+      'minSales': filters.minSales,
+      'shippingFilter': filters.shippingFilter.name,
+      'stores': filters.stores.map((store) => store.name).toList(),
+    },
+  });
+  final request = await _searchRequest(
+    'http://127.0.0.1:8768/search',
+    payload,
   );
 
   final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
@@ -56,4 +56,48 @@ Future<List<ProductResult>> searchProducts({
   }
 
   return results;
+}
+
+Future<html.HttpRequest> _searchRequest(String url, String payload) async {
+  final session = _savedSessionToken();
+  final request = html.HttpRequest();
+  final completer = Completer<html.HttpRequest>();
+  request
+    ..open('POST', url, async: true)
+    ..setRequestHeader('Content-Type', 'application/json');
+  if (session != null) {
+    request.setRequestHeader('Authorization', 'Bearer $session');
+  }
+  request.onLoadEnd.first.then((_) {
+    if (!completer.isCompleted) completer.complete(request);
+  });
+  request.onError.first.then((_) {
+    if (!completer.isCompleted) {
+      completer.completeError(
+        const ProductSearchException(
+          'No pude comunicarme con el backend local. Verifica que PriceSec este activo.',
+        ),
+      );
+    }
+  });
+  request.send(payload);
+  try {
+    return await completer.future.timeout(const Duration(seconds: 35));
+  } on TimeoutException {
+    throw const ProductSearchException(
+      'La busqueda tardo demasiado. Revisa la ventana de Chrome de PriceSec y vuelve a intentar.',
+    );
+  }
+}
+
+String? _savedSessionToken() {
+  final raw = html.window.localStorage['pricesec_auth_session'];
+  if (raw == null || raw.isEmpty) return null;
+  try {
+    final body = jsonDecode(raw) as Map<String, dynamic>;
+    final token = body['token'] as String?;
+    return token == null || token.isEmpty ? null : token;
+  } catch (_) {
+    return null;
+  }
 }

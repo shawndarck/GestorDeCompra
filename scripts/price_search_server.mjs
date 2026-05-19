@@ -197,6 +197,7 @@ db.exec(`
     public_sale_value REAL NOT NULL DEFAULT 0,
     loaded_at TEXT NOT NULL,
     warehouse TEXT NOT NULL,
+    created_by_user_id INTEGER,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
@@ -236,6 +237,7 @@ function runMigrations() {
   for (const table of ['purchases', 'aliexpress_viabilities', 'inventory_items', 'sales']) {
     ensureColumn(table, 'tenant_id', 'INTEGER');
   }
+  ensureColumn('inventory_items', 'created_by_user_id', 'INTEGER');
   for (const [key, label] of defaultPermissions) {
     db.prepare('INSERT OR IGNORE INTO permissions (key, label) VALUES (?, ?)').run(key, label);
   }
@@ -1482,6 +1484,8 @@ function inventoryItemFromRow(row) {
     publicSaleValue: row.public_sale_value,
     loadedAt: row.loaded_at,
     warehouse: row.warehouse,
+    createdByUserId: row.created_by_user_id ?? null,
+    createdByUsername: row.created_by_username ?? row.created_by_profile ?? '',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -1491,7 +1495,13 @@ function listInventoryItems(user) {
   const tenantId = requireTenant(user);
   requirePermission(user, 'view_inventory');
   return db
-    .prepare('SELECT * FROM inventory_items WHERE tenant_id = ? ORDER BY updated_at DESC, id DESC')
+    .prepare(`
+      SELECT inventory_items.*, users.username AS created_by_username, users.profile_name AS created_by_profile
+      FROM inventory_items
+      LEFT JOIN users ON users.id = inventory_items.created_by_user_id
+      WHERE inventory_items.tenant_id = ?
+      ORDER BY inventory_items.updated_at DESC, inventory_items.id DESC
+    `)
     .all(tenantId)
     .map(inventoryItemFromRow);
 }
@@ -1512,8 +1522,8 @@ function createInventoryItem(input, user) {
         INSERT INTO inventory_items (
           tenant_id,
           product_name, unit_purchase_value, quantity, public_sale_value,
-          loaded_at, warehouse
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          loaded_at, warehouse, created_by_user_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `,
     )
     .run(
@@ -1524,15 +1534,20 @@ function createInventoryItem(input, user) {
       item.publicSaleValue,
       item.loadedAt,
       item.warehouse,
+      user.id,
     );
   return getInventoryItem(Number(result.lastInsertRowid), user);
 }
 
 function getInventoryItem(id, user) {
-  const row = db.prepare('SELECT * FROM inventory_items WHERE id = ? AND tenant_id = ?').get(
-    id,
-    requireTenant(user),
-  );
+  const row = db
+    .prepare(`
+      SELECT inventory_items.*, users.username AS created_by_username, users.profile_name AS created_by_profile
+      FROM inventory_items
+      LEFT JOIN users ON users.id = inventory_items.created_by_user_id
+      WHERE inventory_items.id = ? AND inventory_items.tenant_id = ?
+    `)
+    .get(id, requireTenant(user));
   if (!row) throw new Error('Producto de inventario no encontrado.');
   return inventoryItemFromRow(row);
 }
@@ -1875,7 +1890,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
-    requireTenant(user);
+    if (user.role !== 'super_admin') requireTenant(user);
     requirePermission(user, 'create_publications');
     const body = await readJson(req);
     const product = String(body.product ?? '').trim();
