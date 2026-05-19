@@ -462,15 +462,15 @@ Al guardar, el backend descuenta la cantidad vendida del inventario seleccionado
 
 ## Base De Datos
 
-SQLite se crea automaticamente en:
+SQLite esta incluida en el repositorio como base limpia:
 
 ```text
 pricesec.db
 ```
 
-`pricesec.db` no se sube al repositorio. Cada PC crea su propia base local limpia
-al levantar el backend por primera vez. En una base nueva, la pantalla inicial
-permite crear el primer Super Admin de esa instalacion.
+La base se sube sin usuarios, sin tenants de clientes y sin registros de negocio.
+Al descargar el repo, la pantalla inicial permite crear el primer Super Admin de
+esa instalacion.
 
 Tablas principales:
 
@@ -485,7 +485,8 @@ inventory_items
 sales
 ```
 
-El archivo `pricesec.db` esta ignorado por Git para no mezclar datos locales con codigo.
+Los backups locales `pricesec.backup-*.db` si estan ignorados por Git para no
+mezclar datos privados con codigo.
 
 ## Problemas Frecuentes
 

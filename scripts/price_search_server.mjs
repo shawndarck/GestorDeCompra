@@ -262,6 +262,10 @@ function backfillLegacyTenant() {
   const owner = db
     .prepare("SELECT * FROM users WHERE role IN ('owner', 'user') ORDER BY id LIMIT 1")
     .get();
+  const legacyRows = ['purchases', 'aliexpress_viabilities', 'inventory_items', 'sales'].some(
+    (table) => db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE tenant_id IS NULL`).get().count > 0,
+  );
+  if (!owner && !legacyRows) return;
   if (!owner && tenantRows > 0) return;
   let tenantId = owner ? ensureTenantForOwner(owner) : null;
   if (!tenantId && tenantRows === 0) {
