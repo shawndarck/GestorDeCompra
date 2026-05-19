@@ -1,5 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter, deprecated_member_use
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
 
@@ -86,6 +87,171 @@ Future<void> confirmPasswordResetCode({
         jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
     throw Exception(body['message'] as String? ?? 'No pude restablecer.');
   }
+}
+
+Future<List<PermissionInfo>> loadPermissions() async {
+  final request = await _request('$_baseUrl/permissions');
+  final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
+  return (body['permissions'] as List<dynamic>? ?? const [])
+      .whereType<Map<String, dynamic>>()
+      .map(PermissionInfo.fromJson)
+      .toList();
+}
+
+Future<List<AuthUser>> loadPrincipalUsers() async {
+  final request = await _request('$_baseUrl/admin/principal-users');
+  final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
+  return (body['users'] as List<dynamic>? ?? const [])
+      .whereType<Map<String, dynamic>>()
+      .map(AuthUser.fromJson)
+      .toList();
+}
+
+Future<AuthUser> createPrincipalUser({
+  required String username,
+  required String email,
+  required String password,
+  required String profileName,
+  required String phone,
+}) async {
+  final request = await _request(
+    '$_baseUrl/admin/principal-users',
+    method: 'POST',
+    requestHeaders: {'Content-Type': 'application/json'},
+    sendData: jsonEncode({
+      'username': username,
+      'email': email,
+      'password': password,
+      'profileName': profileName,
+      'phone': phone,
+    }),
+  );
+  final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
+  if (request.status != 200) {
+    throw Exception(body['message'] as String? ?? 'No pude crear usuario.');
+  }
+  return AuthUser.fromJson(body['user'] as Map<String, dynamic>);
+}
+
+Future<AuthUser> updatePrincipalUser({
+  required int id,
+  required String profileName,
+  required String phone,
+  required String status,
+}) async {
+  final request = await _request(
+    '$_baseUrl/admin/principal-users/$id',
+    method: 'PUT',
+    requestHeaders: {'Content-Type': 'application/json'},
+    sendData: jsonEncode({
+      'profileName': profileName,
+      'phone': phone,
+      'status': status,
+    }),
+  );
+  final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
+  if (request.status != 200) {
+    throw Exception(
+      body['message'] as String? ?? 'No pude actualizar usuario.',
+    );
+  }
+  return AuthUser.fromJson(body['user'] as Map<String, dynamic>);
+}
+
+Future<List<AuthUser>> loadCollaborators() async {
+  final request = await _request('$_baseUrl/collaborators');
+  final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
+  return (body['collaborators'] as List<dynamic>? ?? const [])
+      .whereType<Map<String, dynamic>>()
+      .map(AuthUser.fromJson)
+      .toList();
+}
+
+Future<AuthUser> createCollaborator({
+  required String username,
+  required String email,
+  required String password,
+  required String profileName,
+  required List<String> permissions,
+}) async {
+  final request = await _request(
+    '$_baseUrl/collaborators',
+    method: 'POST',
+    requestHeaders: {'Content-Type': 'application/json'},
+    sendData: jsonEncode({
+      'username': username,
+      'email': email,
+      'password': password,
+      'profileName': profileName,
+      'permissions': permissions,
+    }),
+  );
+  final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
+  if (request.status != 200) {
+    throw Exception(body['message'] as String? ?? 'No pude crear colaborador.');
+  }
+  return AuthUser.fromJson(body['collaborator'] as Map<String, dynamic>);
+}
+
+Future<AuthUser> updateCollaborator({
+  required int id,
+  required String profileName,
+  required String status,
+  required List<String> permissions,
+}) async {
+  final request = await _request(
+    '$_baseUrl/collaborators/$id',
+    method: 'PUT',
+    requestHeaders: {'Content-Type': 'application/json'},
+    sendData: jsonEncode({
+      'profileName': profileName,
+      'status': status,
+      'permissions': permissions,
+    }),
+  );
+  final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
+  if (request.status != 200) {
+    throw Exception(
+      body['message'] as String? ?? 'No pude actualizar colaborador.',
+    );
+  }
+  return AuthUser.fromJson(body['collaborator'] as Map<String, dynamic>);
+}
+
+Future<List<MercadoLibreStore>> loadMercadoLibreStores() async {
+  final request = await _request('$_baseUrl/mercado-libre-stores');
+  final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
+  return (body['stores'] as List<dynamic>? ?? const [])
+      .whereType<Map<String, dynamic>>()
+      .map(MercadoLibreStore.fromJson)
+      .toList();
+}
+
+Future<MercadoLibreStore> saveMercadoLibreStore({
+  int? id,
+  required String name,
+  required String storeUser,
+  required String storeUrl,
+  String status = 'active',
+}) async {
+  final request = await _request(
+    id == null
+        ? '$_baseUrl/mercado-libre-stores'
+        : '$_baseUrl/mercado-libre-stores/$id',
+    method: id == null ? 'POST' : 'PUT',
+    requestHeaders: {'Content-Type': 'application/json'},
+    sendData: jsonEncode({
+      'name': name,
+      'storeUser': storeUser,
+      'storeUrl': storeUrl,
+      'status': status,
+    }),
+  );
+  final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
+  if (request.status != 200) {
+    throw Exception(body['message'] as String? ?? 'No pude guardar tienda.');
+  }
+  return MercadoLibreStore.fromJson(body['store'] as Map<String, dynamic>);
 }
 
 void logoutAuthUser() {
@@ -293,17 +459,30 @@ Future<html.HttpRequest> _request(
   Object? sendData,
   bool includeAuth = true,
 }) async {
+  final headers = {...?requestHeaders};
+  final session = includeAuth ? loadSavedAuthSession() : null;
+  if (session != null) headers['Authorization'] = 'Bearer ${session.token}';
+  final request = html.HttpRequest();
+  final completer = Completer<html.HttpRequest>();
+  request
+    ..open(method ?? 'GET', url, async: true)
+    ..onLoadEnd.first.then((_) {
+      if (!completer.isCompleted) completer.complete(request);
+    })
+    ..onError.first.then((_) {
+      if (!completer.isCompleted) {
+        completer.completeError(
+          Exception(
+            'No pude comunicarme con el backend local. Verifica http://127.0.0.1:8768/health y vuelve a intentar.',
+          ),
+        );
+      }
+    });
+  headers.forEach(request.setRequestHeader);
+  request.send(sendData);
   try {
-    final headers = {...?requestHeaders};
-    final session = includeAuth ? loadSavedAuthSession() : null;
-    if (session != null) headers['Authorization'] = 'Bearer ${session.token}';
-    return await html.HttpRequest.request(
-      url,
-      method: method,
-      requestHeaders: headers.isEmpty ? null : headers,
-      sendData: sendData,
-    ).timeout(_requestTimeout);
-  } catch (_) {
+    return await completer.future.timeout(_requestTimeout);
+  } on TimeoutException {
     throw Exception(
       'No pude comunicarme con el backend local. Verifica http://127.0.0.1:8768/health y vuelve a intentar.',
     );

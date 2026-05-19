@@ -538,3 +538,99 @@ flutter analyze: sin errores
 flutter test: pruebas pasando
 node --check: sin errores de sintaxis
 ```
+## Multiusuario, Roles Y Tenants
+
+PriceSec ahora maneja un modelo multiusuario local:
+
+- `super_admin`: administrador global. Solo este rol puede crear, consultar,
+  activar e inactivar usuarios principales.
+- `owner`: usuario principal o cliente. Tiene un `tenant_id` propio y sus datos
+  quedan separados de los demas usuarios principales.
+- `collaborator`: colaborador creado por un owner. Comparte el tenant del owner
+  y solo ve los modulos habilitados por permisos.
+
+La separacion se hace en `pricesec.db` con `tenant_id` en las tablas de negocio:
+
+```text
+purchases
+aliexpress_viabilities
+inventory_items
+sales
+mercado_libre_stores
+```
+
+Tablas de acceso:
+
+```text
+users
+tenants
+permissions
+user_permissions
+mercado_libre_stores
+user_sessions
+```
+
+Permisos disponibles:
+
+```text
+view_sales
+create_publications
+edit_publications
+delete_publications
+view_inventory
+modify_inventory
+manage_stores
+manage_collaborators
+view_reports
+manage_settings
+```
+
+Datos semilla locales para pruebas:
+
+```text
+Super Admin global
+Usuario: SHAWNDARCK
+Correo: admin@pricesec.local
+Contrasena: PriceSecAdmin2026!
+
+Usuario principal demo
+Usuario: cliente_demo
+Correo: cliente.demo@pricesec.local
+Contrasena: ClienteDemo2026!
+
+Colaborador demo
+Usuario: colaborador_demo
+Correo: colaborador.demo@pricesec.local
+Contrasena: Colaborador2026!
+Permisos: view_inventory, view_sales, view_reports
+```
+
+Flujo de prueba recomendado:
+
+1. Inicia sesion como `SHAWNDARCK`.
+2. Abre `Usuarios principales`.
+3. Crea un usuario principal. El backend crea su tenant aislado.
+4. Cierra sesion e inicia con ese usuario principal.
+5. Abre `Tiendas Mercado Libre` y registra una o mas tiendas.
+6. Abre `Colaboradores`, crea un colaborador y asigna permisos.
+7. Cierra sesion e inicia con el colaborador.
+8. Verifica que solo aparezcan los modulos permitidos.
+
+Endpoints multiusuario:
+
+```text
+GET  /permissions
+GET  /admin/principal-users
+POST /admin/principal-users
+PUT  /admin/principal-users/:id
+GET  /collaborators
+POST /collaborators
+PUT  /collaborators/:id
+GET  /mercado-libre-stores
+POST /mercado-libre-stores
+PUT  /mercado-libre-stores/:id
+```
+
+Los endpoints existentes (`/purchases`, `/aliexpress-viabilities`,
+`/inventory`, `/sales`, `/search`) validan token, tenant y permisos antes de
+consultar o modificar informacion.

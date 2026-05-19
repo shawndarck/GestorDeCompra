@@ -81,6 +81,20 @@ enum StoreOption {
   final IconData icon;
 }
 
+enum _VisualSkin {
+  cyber('Cyber UI', Icons.memory),
+  neumorphic('Neo UI', Icons.blur_on);
+
+  const _VisualSkin(this.label, this.icon);
+
+  final String label;
+  final IconData icon;
+}
+
+_VisualSkin _activeVisualSkin = _VisualSkin.cyber;
+
+bool get _isNeoSkin => _activeVisualSkin == _VisualSkin.neumorphic;
+
 const fixedMonitorConfig = FixedMonitorConfig(
   country: 'Colombia',
   currency: 'COP',
@@ -99,21 +113,66 @@ class _CyberColors {
   static const textSecondary = Color(0xff94a3b8);
 }
 
+class _NeoColors {
+  static const bg = Color(0xffe0e5ec);
+  static const surface = Color(0xffe0e5ec);
+  static const shadowDark = Color(0xffa3b1c6);
+  static const shadowLight = Color(0xffffffff);
+  static const primary = Color(0xff6366f1);
+  static const success = Color(0xff22c55e);
+  static const textPrimary = Color(0xff374151);
+  static const textSecondary = Color(0xff6b7280);
+  static const lightEdge = Color(0xffd6dde7);
+}
+
 class AuthUser {
   const AuthUser({
     required this.id,
     required this.username,
     required this.email,
     required this.role,
+    this.tenantId,
+    this.parentUserId,
+    this.status = 'active',
+    this.profileName = '',
+    this.phone = '',
+    this.permissions = const [],
+    this.stores = const [],
   });
 
   final int id;
   final String username;
   final String email;
   final String role;
+  final int? tenantId;
+  final int? parentUserId;
+  final String status;
+  final String profileName;
+  final String phone;
+  final List<String> permissions;
+  final List<MercadoLibreStore> stores;
+
+  bool get isSuperAdmin => role == 'super_admin';
+  bool get isOwner => role == 'owner';
+
+  bool can(String permission) {
+    return isSuperAdmin || isOwner || permissions.contains(permission);
+  }
 
   Map<String, dynamic> toJson() {
-    return {'id': id, 'username': username, 'email': email, 'role': role};
+    return {
+      'id': id,
+      'username': username,
+      'email': email,
+      'role': role,
+      'tenantId': tenantId,
+      'parentUserId': parentUserId,
+      'status': status,
+      'profileName': profileName,
+      'phone': phone,
+      'permissions': permissions,
+      'stores': stores.map((store) => store.toJson()).toList(),
+    };
   }
 
   factory AuthUser.fromJson(Map<String, dynamic> json) {
@@ -122,6 +181,68 @@ class AuthUser {
       username: json['username'] as String? ?? '',
       email: json['email'] as String? ?? '',
       role: json['role'] as String? ?? 'user',
+      tenantId: (json['tenantId'] as num?)?.round(),
+      parentUserId: (json['parentUserId'] as num?)?.round(),
+      status: json['status'] as String? ?? 'active',
+      profileName: json['profileName'] as String? ?? '',
+      phone: json['phone'] as String? ?? '',
+      permissions: (json['permissions'] as List<dynamic>? ?? const [])
+          .map((value) => value.toString())
+          .toList(),
+      stores: (json['stores'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(MercadoLibreStore.fromJson)
+          .toList(),
+    );
+  }
+}
+
+class PermissionInfo {
+  const PermissionInfo({required this.key, required this.label});
+
+  final String key;
+  final String label;
+
+  factory PermissionInfo.fromJson(Map<String, dynamic> json) {
+    return PermissionInfo(
+      key: json['key'] as String? ?? '',
+      label: json['label'] as String? ?? '',
+    );
+  }
+}
+
+class MercadoLibreStore {
+  const MercadoLibreStore({
+    required this.id,
+    required this.name,
+    required this.storeUser,
+    required this.storeUrl,
+    required this.status,
+  });
+
+  final int id;
+  final String name;
+  final String storeUser;
+  final String storeUrl;
+  final String status;
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'name': name,
+      'storeUser': storeUser,
+      'storeUrl': storeUrl,
+      'status': status,
+    };
+  }
+
+  factory MercadoLibreStore.fromJson(Map<String, dynamic> json) {
+    return MercadoLibreStore(
+      id: (json['id'] as num? ?? 0).round(),
+      name: json['name'] as String? ?? '',
+      storeUser: json['storeUser'] as String? ?? '',
+      storeUrl: json['storeUrl'] as String? ?? '',
+      status: json['status'] as String? ?? 'active',
     );
   }
 }
@@ -175,14 +296,22 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
   List<AliExpressViabilityRecord> _viabilityRecords = const [];
   List<InventoryItemRecord> _inventoryItems = const [];
   List<SaleRecord> _sales = const [];
+  List<AuthUser> _principalUsers = const [];
+  List<AuthUser> _collaborators = const [];
+  List<PermissionInfo> _permissions = const [];
+  List<MercadoLibreStore> _mercadoLibreStores = const [];
   String? _statusMessage;
   String? _purchaseMessage;
   String? _viabilityMessage;
   String? _inventoryMessage;
   String? _salesMessage;
+  String? _adminMessage;
+  String? _collaboratorMessage;
+  String? _storeMessage;
   int? _editingPurchaseId;
   int? _editingViabilityId;
   int _activeTab = 0;
+  _VisualSkin _visualSkin = _VisualSkin.cyber;
   double? _currentTrm;
   bool _isLoadingCurrentTrm = false;
   int _trmRevision = 0;
@@ -193,6 +322,31 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
     shippingFilter: _shippingFilter,
     stores: _selectedStores,
   );
+
+  List<_ModuleOption> get _availableModules {
+    final user = _authSession?.user;
+    if (user == null) return const [];
+    return [
+      for (final option in _moduleOptions)
+        if (_canOpenModule(user, option.index)) option,
+    ];
+  }
+
+  bool _canOpenModule(AuthUser user, int index) {
+    return switch (index) {
+      0 => user.can('create_publications'),
+      1 => user.can('create_publications'),
+      2 => user.can('view_reports'),
+      3 => user.can('create_publications'),
+      4 => user.can('view_reports'),
+      5 => user.can('view_inventory') || user.can('modify_inventory'),
+      6 => user.can('view_sales'),
+      7 => user.isSuperAdmin,
+      8 => user.can('manage_collaborators'),
+      9 => user.can('manage_stores'),
+      _ => false,
+    };
+  }
 
   @override
   void dispose() {
@@ -208,6 +362,7 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
 
   @override
   Widget build(BuildContext context) {
+    _activeVisualSkin = _visualSkin;
     if (_isCheckingAuth) {
       return const Scaffold(
         body: Stack(
@@ -221,11 +376,20 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
     if (_authSession == null) {
       return _AuthGate(onAuthenticated: _handleAuthenticated);
     }
+    final modules = _availableModules;
+    if (modules.isNotEmpty &&
+        !modules.any((option) => option.index == _activeTab)) {
+      _activeTab = modules.first.index;
+    }
 
     return Scaffold(
       body: Stack(
         children: [
-          const Positioned.fill(child: _CyberBackground()),
+          Positioned.fill(
+            child: _visualSkin == _VisualSkin.neumorphic
+                ? const _NeumorphicBackground()
+                : const _CyberBackground(),
+          ),
           SafeArea(
             child: Center(
               child: SingleChildScrollView(
@@ -240,10 +404,13 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
                         isRunning: _isRunning,
                         session: _authSession!,
                         onLogout: _logout,
+                        visualSkin: _visualSkin,
+                        onToggleSkin: _toggleVisualSkin,
                       ),
                       const SizedBox(height: 28),
                       _ModuleSelector(
                         activeIndex: _activeTab,
+                        options: modules,
                         onChanged: _changeTab,
                       ),
                       const SizedBox(height: 18),
@@ -347,12 +514,33 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
                           onSave: _saveInventoryItem,
                           onDelete: _deleteInventoryItem,
                         )
-                      else
+                      else if (_activeTab == 6)
                         _SalesSection(
                           inventoryItems: _inventoryItems,
                           sales: _sales,
                           message: _salesMessage,
                           onSave: _saveSale,
+                        )
+                      else if (_activeTab == 7)
+                        _PrincipalUsersSection(
+                          users: _principalUsers,
+                          message: _adminMessage,
+                          onCreate: _createPrincipalUser,
+                          onUpdate: _updatePrincipalUser,
+                        )
+                      else if (_activeTab == 8)
+                        _CollaboratorsSection(
+                          collaborators: _collaborators,
+                          permissions: _permissions,
+                          message: _collaboratorMessage,
+                          onCreate: _createCollaborator,
+                          onUpdate: _updateCollaborator,
+                        )
+                      else
+                        _MercadoLibreStoresSection(
+                          stores: _mercadoLibreStores,
+                          message: _storeMessage,
+                          onSave: _saveMercadoLibreStore,
                         ),
                     ],
                   ),
@@ -376,6 +564,7 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
       await _loadAliExpressViabilities();
       await _loadInventoryItems();
       await _loadSales();
+      await _loadAccessManagement();
       await _loadCurrentTrmSuggestion();
     }
   }
@@ -386,6 +575,7 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
     await _loadAliExpressViabilities();
     await _loadInventoryItems();
     await _loadSales();
+    await _loadAccessManagement();
     await _loadCurrentTrmSuggestion();
   }
 
@@ -397,6 +587,10 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
       _viabilityRecords = const [];
       _inventoryItems = const [];
       _sales = const [];
+      _principalUsers = const [];
+      _collaborators = const [];
+      _permissions = const [];
+      _mercadoLibreStores = const [];
       _editingPurchaseId = null;
       _editingViabilityId = null;
       _activeTab = 0;
@@ -466,6 +660,18 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
       _loadInventoryItems();
       _loadSales();
     }
+    if (index == 7) _loadPrincipalUsers();
+    if (index == 8) _loadCollaboratorPanel();
+    if (index == 9) _loadMercadoLibreStores();
+  }
+
+  void _toggleVisualSkin() {
+    setState(() {
+      _visualSkin = _visualSkin == _VisualSkin.cyber
+          ? _VisualSkin.neumorphic
+          : _VisualSkin.cyber;
+      _activeVisualSkin = _visualSkin;
+    });
   }
 
   Future<void> _loadCurrentTrmSuggestion() async {
@@ -535,6 +741,51 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
     }
   }
 
+  Future<void> _loadAccessManagement() async {
+    final user = _authSession?.user;
+    if (user == null) return;
+    if (user.isSuperAdmin) await _loadPrincipalUsers();
+    if (user.can('manage_collaborators')) await _loadCollaboratorPanel();
+    if (user.can('manage_stores')) await _loadMercadoLibreStores();
+  }
+
+  Future<void> _loadPrincipalUsers() async {
+    try {
+      final users = await loadPrincipalUsers();
+      if (!mounted) return;
+      setState(() => _principalUsers = users);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _adminMessage = _cleanError(error));
+    }
+  }
+
+  Future<void> _loadCollaboratorPanel() async {
+    try {
+      final permissions = await loadPermissions();
+      final collaborators = await loadCollaborators();
+      if (!mounted) return;
+      setState(() {
+        _permissions = permissions;
+        _collaborators = collaborators;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _collaboratorMessage = _cleanError(error));
+    }
+  }
+
+  Future<void> _loadMercadoLibreStores() async {
+    try {
+      final stores = await loadMercadoLibreStores();
+      if (!mounted) return;
+      setState(() => _mercadoLibreStores = stores);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _storeMessage = _cleanError(error));
+    }
+  }
+
   Future<bool> _savePurchase(PurchaseDraft draft) async {
     try {
       await savePurchase(draft, id: _editingPurchaseId);
@@ -586,6 +837,108 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
     } catch (error) {
       if (!mounted) return false;
       setState(() => _inventoryMessage = _cleanError(error));
+      return false;
+    }
+  }
+
+  Future<bool> _createPrincipalUser(PrincipalUserDraft draft) async {
+    try {
+      await createPrincipalUser(
+        username: draft.username,
+        email: draft.email,
+        password: draft.password,
+        profileName: draft.profileName,
+        phone: draft.phone,
+      );
+      final users = await loadPrincipalUsers();
+      if (!mounted) return false;
+      setState(() {
+        _principalUsers = users;
+        _adminMessage = 'Usuario principal creado con tenant independiente.';
+      });
+      return true;
+    } catch (error) {
+      if (!mounted) return false;
+      setState(() => _adminMessage = _cleanError(error));
+      return false;
+    }
+  }
+
+  Future<void> _updatePrincipalUser(AuthUser user, String status) async {
+    try {
+      await updatePrincipalUser(
+        id: user.id,
+        profileName: user.profileName.isEmpty
+            ? user.username
+            : user.profileName,
+        phone: user.phone,
+        status: status,
+      );
+      await _loadPrincipalUsers();
+      if (!mounted) return;
+      setState(() => _adminMessage = 'Usuario actualizado.');
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _adminMessage = _cleanError(error));
+    }
+  }
+
+  Future<bool> _createCollaborator(CollaboratorDraft draft) async {
+    try {
+      await createCollaborator(
+        username: draft.username,
+        email: draft.email,
+        password: draft.password,
+        profileName: draft.profileName,
+        permissions: draft.permissions,
+      );
+      await _loadCollaboratorPanel();
+      if (!mounted) return false;
+      setState(() => _collaboratorMessage = 'Colaborador creado.');
+      return true;
+    } catch (error) {
+      if (!mounted) return false;
+      setState(() => _collaboratorMessage = _cleanError(error));
+      return false;
+    }
+  }
+
+  Future<void> _updateCollaborator(
+    AuthUser user,
+    List<String> permissions,
+  ) async {
+    try {
+      await updateCollaborator(
+        id: user.id,
+        profileName: user.profileName.isEmpty
+            ? user.username
+            : user.profileName,
+        status: user.status,
+        permissions: permissions,
+      );
+      await _loadCollaboratorPanel();
+      if (!mounted) return;
+      setState(() => _collaboratorMessage = 'Permisos actualizados.');
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _collaboratorMessage = _cleanError(error));
+    }
+  }
+
+  Future<bool> _saveMercadoLibreStore(MercadoLibreStoreDraft draft) async {
+    try {
+      await saveMercadoLibreStore(
+        name: draft.name,
+        storeUser: draft.storeUser,
+        storeUrl: draft.storeUrl,
+      );
+      await _loadMercadoLibreStores();
+      if (!mounted) return false;
+      setState(() => _storeMessage = 'Tienda guardada.');
+      return true;
+    } catch (error) {
+      if (!mounted) return false;
+      setState(() => _storeMessage = _cleanError(error));
       return false;
     }
   }
@@ -699,12 +1052,16 @@ class _HeaderBar extends StatelessWidget {
     required this.isRunning,
     required this.session,
     required this.onLogout,
+    required this.visualSkin,
+    required this.onToggleSkin,
   });
 
   final VoidCallback onRun;
   final bool isRunning;
   final AuthSession session;
   final VoidCallback onLogout;
+  final _VisualSkin visualSkin;
+  final VoidCallback onToggleSkin;
 
   @override
   Widget build(BuildContext context) {
@@ -714,22 +1071,23 @@ class _HeaderBar extends StatelessWidget {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 760;
-          final brand = const Row(
+          final brand = Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
                 Icons.shield_outlined,
-                color: _CyberColors.primary,
+                color: _isNeoSkin ? _NeoColors.primary : _CyberColors.primary,
                 size: 34,
               ),
-              SizedBox(width: 10),
+              const SizedBox(width: 10),
               Text(
                 'PriceSec',
                 style: TextStyle(
-                  color: _CyberColors.primary,
+                  color: _isNeoSkin
+                      ? _NeoColors.textPrimary
+                      : _CyberColors.primary,
                   fontSize: 22,
                   fontWeight: FontWeight.w900,
-                  letterSpacing: 1.5,
                 ),
               ),
             ],
@@ -753,16 +1111,46 @@ class _HeaderBar extends StatelessWidget {
                     ? 'Super admin'
                     : session.user.username,
               ),
-              FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  backgroundColor: _CyberColors.primary,
-                  foregroundColor: _CyberColors.bgDarker,
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _isNeoSkin
+                      ? _NeoColors.primary
+                      : _CyberColors.textPrimary,
+                  side: BorderSide(
+                    color: _isNeoSkin
+                        ? _NeoColors.lightEdge
+                        : _CyberColors.border,
+                  ),
                   padding: const EdgeInsets.symmetric(
                     horizontal: 18,
                     vertical: 16,
                   ),
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(_isNeoSkin ? 12 : 8),
+                  ),
+                ),
+                onPressed: onToggleSkin,
+                icon: Icon(visualSkin.icon),
+                label: Text(
+                  visualSkin == _VisualSkin.neumorphic
+                      ? 'Vista Cyber'
+                      : 'Vista Neo',
+                ),
+              ),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: _isNeoSkin
+                      ? _NeoColors.primary
+                      : _CyberColors.primary,
+                  foregroundColor: _isNeoSkin
+                      ? Colors.white
+                      : _CyberColors.bgDarker,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 16,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(_isNeoSkin ? 12 : 8),
                   ),
                 ),
                 onPressed: isRunning ? null : onRun,
@@ -810,19 +1198,45 @@ class _HeaderPill extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
-        color: _CyberColors.primary.withValues(alpha: 0.05),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _CyberColors.primary.withValues(alpha: 0.28)),
+        color: _isNeoSkin
+            ? _NeoColors.bg
+            : _CyberColors.primary.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(_isNeoSkin ? 12 : 8),
+        border: Border.all(
+          color: _isNeoSkin
+              ? Colors.transparent
+              : _CyberColors.primary.withValues(alpha: 0.28),
+        ),
+        boxShadow: _isNeoSkin
+            ? const [
+                BoxShadow(
+                  color: _NeoColors.shadowDark,
+                  blurRadius: 8,
+                  offset: Offset(3, 3),
+                ),
+                BoxShadow(
+                  color: _NeoColors.shadowLight,
+                  blurRadius: 8,
+                  offset: Offset(-3, -3),
+                ),
+              ]
+            : null,
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 17, color: _CyberColors.secondary),
+          Icon(
+            icon,
+            size: 17,
+            color: _isNeoSkin ? _NeoColors.primary : _CyberColors.secondary,
+          ),
           const SizedBox(width: 7),
           Text(
             label,
-            style: const TextStyle(
-              color: _CyberColors.textPrimary,
+            style: TextStyle(
+              color: _isNeoSkin
+                  ? _NeoColors.textPrimary
+                  : _CyberColors.textPrimary,
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -1246,20 +1660,36 @@ class _AuthRingPainter extends CustomPainter {
   }
 }
 
+class _ModuleOption {
+  const _ModuleOption(this.index, this.icon, this.label);
+
+  final int index;
+  final IconData icon;
+  final String label;
+}
+
 const _moduleOptions = [
-  (Icons.compare_arrows, 'Comparador'),
-  (Icons.inventory_2, 'Registrar compra'),
-  (Icons.list_alt, 'Compras guardadas'),
-  (Icons.fact_check, 'Viabilidad AliExpress'),
-  (Icons.table_rows, 'Viabilidades guardadas'),
-  (Icons.warehouse, 'Registrar inventario'),
-  (Icons.point_of_sale, 'Registrar ventas'),
+  _ModuleOption(0, Icons.compare_arrows, 'Comparador'),
+  _ModuleOption(1, Icons.inventory_2, 'Registrar compra'),
+  _ModuleOption(2, Icons.list_alt, 'Compras guardadas'),
+  _ModuleOption(3, Icons.fact_check, 'Viabilidad AliExpress'),
+  _ModuleOption(4, Icons.table_rows, 'Viabilidades guardadas'),
+  _ModuleOption(5, Icons.warehouse, 'Registrar inventario'),
+  _ModuleOption(6, Icons.point_of_sale, 'Registrar ventas'),
+  _ModuleOption(7, Icons.admin_panel_settings, 'Usuarios principales'),
+  _ModuleOption(8, Icons.group_add, 'Colaboradores'),
+  _ModuleOption(9, Icons.storefront, 'Tiendas Mercado Libre'),
 ];
 
 class _ModuleSelector extends StatefulWidget {
-  const _ModuleSelector({required this.activeIndex, required this.onChanged});
+  const _ModuleSelector({
+    required this.activeIndex,
+    required this.options,
+    required this.onChanged,
+  });
 
   final int activeIndex;
+  final List<_ModuleOption> options;
   final ValueChanged<int> onChanged;
 
   @override
@@ -1278,20 +1708,25 @@ class _ModuleSelectorState extends State<_ModuleSelector> {
 
   @override
   Widget build(BuildContext context) {
-    final active = _moduleOptions[widget.activeIndex];
+    final active = widget.options.firstWhere(
+      (option) => option.index == widget.activeIndex,
+      orElse: () => widget.options.first,
+    );
     final query = _searchController.text;
     final filtered = [
-      for (var i = 0; i < _moduleOptions.length; i++)
-        if (_smartMatches(query, [_moduleOptions[i].$2])) i,
+      for (final option in widget.options)
+        if (_smartMatches(query, [option.label])) option,
     ];
 
     return Container(
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: _CyberColors.card.withValues(alpha: 0.75),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _CyberColors.border),
-      ),
+      decoration: _isNeoSkin
+          ? _cyberPanelDecoration(radius: 16)
+          : BoxDecoration(
+              color: _CyberColors.card.withValues(alpha: 0.75),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: _CyberColors.border),
+            ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1300,15 +1735,25 @@ class _ModuleSelectorState extends State<_ModuleSelector> {
             onTap: () => setState(() => _open = !_open),
             child: Row(
               children: [
-                Icon(active.$1, color: _CyberColors.primary),
+                Icon(active.icon, color: _CyberColors.primary),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    active.$2,
-                    style: const TextStyle(fontWeight: FontWeight.w900),
+                    active.label,
+                    style: TextStyle(
+                      color: _isNeoSkin
+                          ? _NeoColors.textPrimary
+                          : _CyberColors.textPrimary,
+                      fontWeight: FontWeight.w900,
+                    ),
                   ),
                 ),
-                Icon(_open ? Icons.expand_less : Icons.expand_more),
+                Icon(
+                  _open ? Icons.expand_less : Icons.expand_more,
+                  color: _isNeoSkin
+                      ? _NeoColors.textPrimary
+                      : _CyberColors.textPrimary,
+                ),
               ],
             ),
           ),
@@ -1317,7 +1762,11 @@ class _ModuleSelectorState extends State<_ModuleSelector> {
             TextField(
               controller: _searchController,
               onChanged: (_) => setState(() {}),
-              style: const TextStyle(color: _CyberColors.textPrimary),
+              style: TextStyle(
+                color: _isNeoSkin
+                    ? _NeoColors.textPrimary
+                    : _CyberColors.textPrimary,
+              ),
               decoration: _inputDecoration(
                 label: 'Buscar modulo',
                 hint: 'Ej: compra, venta, inventario...',
@@ -1329,13 +1778,13 @@ class _ModuleSelectorState extends State<_ModuleSelector> {
               spacing: 8,
               runSpacing: 8,
               children: [
-                for (final index in filtered)
+                for (final option in filtered)
                   _ModuleOptionButton(
-                    icon: _moduleOptions[index].$1,
-                    label: _moduleOptions[index].$2,
-                    selected: widget.activeIndex == index,
+                    icon: option.icon,
+                    label: option.label,
+                    selected: widget.activeIndex == option.index,
                     onTap: () {
-                      widget.onChanged(index);
+                      widget.onChanged(option.index);
                       setState(() => _open = false);
                     },
                   ),
@@ -1365,19 +1814,600 @@ class _ModuleOptionButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return FilledButton.icon(
       style: FilledButton.styleFrom(
-        backgroundColor: selected ? _CyberColors.primary : Colors.transparent,
+        backgroundColor: selected
+            ? (_isNeoSkin ? _NeoColors.primary : _CyberColors.primary)
+            : Colors.transparent,
         foregroundColor: selected
-            ? _CyberColors.bgDarker
-            : _CyberColors.textPrimary,
+            ? (_isNeoSkin ? Colors.white : _CyberColors.bgDarker)
+            : (_isNeoSkin ? _NeoColors.textPrimary : _CyberColors.textPrimary),
         side: BorderSide(
-          color: selected ? _CyberColors.primary : _CyberColors.border,
+          color: selected
+              ? (_isNeoSkin ? _NeoColors.primary : _CyberColors.primary)
+              : (_isNeoSkin ? Colors.transparent : _CyberColors.border),
         ),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(_isNeoSkin ? 12 : 8),
+        ),
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
       ),
       onPressed: onTap,
       icon: Icon(icon, size: 18),
       label: Text(label),
+    );
+  }
+}
+
+class PrincipalUserDraft {
+  const PrincipalUserDraft({
+    required this.username,
+    required this.email,
+    required this.password,
+    required this.profileName,
+    required this.phone,
+  });
+
+  final String username;
+  final String email;
+  final String password;
+  final String profileName;
+  final String phone;
+}
+
+class CollaboratorDraft {
+  const CollaboratorDraft({
+    required this.username,
+    required this.email,
+    required this.password,
+    required this.profileName,
+    required this.permissions,
+  });
+
+  final String username;
+  final String email;
+  final String password;
+  final String profileName;
+  final List<String> permissions;
+}
+
+class MercadoLibreStoreDraft {
+  const MercadoLibreStoreDraft({
+    required this.name,
+    required this.storeUser,
+    required this.storeUrl,
+  });
+
+  final String name;
+  final String storeUser;
+  final String storeUrl;
+}
+
+class _PrincipalUsersSection extends StatefulWidget {
+  const _PrincipalUsersSection({
+    required this.users,
+    required this.message,
+    required this.onCreate,
+    required this.onUpdate,
+  });
+
+  final List<AuthUser> users;
+  final String? message;
+  final Future<bool> Function(PrincipalUserDraft draft) onCreate;
+  final Future<void> Function(AuthUser user, String status) onUpdate;
+
+  @override
+  State<_PrincipalUsersSection> createState() => _PrincipalUsersSectionState();
+}
+
+class _PrincipalUsersSectionState extends State<_PrincipalUsersSection> {
+  final _username = TextEditingController();
+  final _email = TextEditingController();
+  final _password = TextEditingController();
+  final _profileName = TextEditingController();
+  final _phone = TextEditingController();
+
+  @override
+  void dispose() {
+    _username.dispose();
+    _email.dispose();
+    _password.dispose();
+    _profileName.dispose();
+    _phone.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: _cyberPanelDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _SectionTitle(
+            number: 'SA',
+            title: 'Administracion de usuarios principales',
+          ),
+          const SizedBox(height: 16),
+          _AdminTextField(
+            controller: _username,
+            label: 'Usuario',
+            icon: Icons.person,
+          ),
+          const SizedBox(height: 12),
+          _AdminTextField(
+            controller: _email,
+            label: 'Correo',
+            icon: Icons.email,
+          ),
+          const SizedBox(height: 12),
+          _AdminTextField(
+            controller: _password,
+            label: 'Contrasena inicial',
+            icon: Icons.lock,
+            obscure: true,
+          ),
+          const SizedBox(height: 12),
+          _AdminTextField(
+            controller: _profileName,
+            label: 'Nombre de perfil o cliente',
+            icon: Icons.badge,
+          ),
+          const SizedBox(height: 12),
+          _AdminTextField(
+            controller: _phone,
+            label: 'Telefono',
+            icon: Icons.phone,
+          ),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: () async {
+              final saved = await widget.onCreate(
+                PrincipalUserDraft(
+                  username: _username.text.trim(),
+                  email: _email.text.trim(),
+                  password: _password.text,
+                  profileName: _profileName.text.trim(),
+                  phone: _phone.text.trim(),
+                ),
+              );
+              if (!saved) return;
+              _username.clear();
+              _email.clear();
+              _password.clear();
+              _profileName.clear();
+              _phone.clear();
+            },
+            icon: const Icon(Icons.person_add),
+            label: const Text('Crear usuario principal'),
+          ),
+          if (widget.message != null) ...[
+            const SizedBox(height: 12),
+            _PurchaseMessage(message: widget.message!),
+          ],
+          const SizedBox(height: 20),
+          for (final user in widget.users)
+            _UserAccessTile(user: user, onUpdate: widget.onUpdate),
+        ],
+      ),
+    );
+  }
+}
+
+class _CollaboratorsSection extends StatefulWidget {
+  const _CollaboratorsSection({
+    required this.collaborators,
+    required this.permissions,
+    required this.message,
+    required this.onCreate,
+    required this.onUpdate,
+  });
+
+  final List<AuthUser> collaborators;
+  final List<PermissionInfo> permissions;
+  final String? message;
+  final Future<bool> Function(CollaboratorDraft draft) onCreate;
+  final Future<void> Function(AuthUser user, List<String> permissions) onUpdate;
+
+  @override
+  State<_CollaboratorsSection> createState() => _CollaboratorsSectionState();
+}
+
+class _CollaboratorsSectionState extends State<_CollaboratorsSection> {
+  final _username = TextEditingController();
+  final _email = TextEditingController();
+  final _password = TextEditingController();
+  final _profileName = TextEditingController();
+  final Set<String> _selectedPermissions = {};
+
+  @override
+  void dispose() {
+    _username.dispose();
+    _email.dispose();
+    _password.dispose();
+    _profileName.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: _cyberPanelDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _SectionTitle(number: 'CO', title: 'Colaboradores y permisos'),
+          const SizedBox(height: 16),
+          _AdminTextField(
+            controller: _username,
+            label: 'Usuario colaborador',
+            icon: Icons.person,
+          ),
+          const SizedBox(height: 12),
+          _AdminTextField(
+            controller: _email,
+            label: 'Correo',
+            icon: Icons.email,
+          ),
+          const SizedBox(height: 12),
+          _AdminTextField(
+            controller: _password,
+            label: 'Contrasena inicial',
+            icon: Icons.lock,
+            obscure: true,
+          ),
+          const SizedBox(height: 12),
+          _AdminTextField(
+            controller: _profileName,
+            label: 'Nombre de perfil',
+            icon: Icons.badge,
+          ),
+          const SizedBox(height: 14),
+          _PermissionWrap(
+            permissions: widget.permissions,
+            selected: _selectedPermissions,
+            onChanged: (key, value) {
+              setState(() {
+                if (value) {
+                  _selectedPermissions.add(key);
+                } else {
+                  _selectedPermissions.remove(key);
+                }
+              });
+            },
+          ),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: () async {
+              final saved = await widget.onCreate(
+                CollaboratorDraft(
+                  username: _username.text.trim(),
+                  email: _email.text.trim(),
+                  password: _password.text,
+                  profileName: _profileName.text.trim(),
+                  permissions: _selectedPermissions.toList(),
+                ),
+              );
+              if (!saved) return;
+              _username.clear();
+              _email.clear();
+              _password.clear();
+              _profileName.clear();
+              setState(_selectedPermissions.clear);
+            },
+            icon: const Icon(Icons.group_add),
+            label: const Text('Crear colaborador'),
+          ),
+          if (widget.message != null) ...[
+            const SizedBox(height: 12),
+            _PurchaseMessage(message: widget.message!),
+          ],
+          const SizedBox(height: 20),
+          for (final collaborator in widget.collaborators)
+            _CollaboratorTile(
+              user: collaborator,
+              permissions: widget.permissions,
+              onUpdate: widget.onUpdate,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MercadoLibreStoresSection extends StatefulWidget {
+  const _MercadoLibreStoresSection({
+    required this.stores,
+    required this.message,
+    required this.onSave,
+  });
+
+  final List<MercadoLibreStore> stores;
+  final String? message;
+  final Future<bool> Function(MercadoLibreStoreDraft draft) onSave;
+
+  @override
+  State<_MercadoLibreStoresSection> createState() =>
+      _MercadoLibreStoresSectionState();
+}
+
+class _MercadoLibreStoresSectionState
+    extends State<_MercadoLibreStoresSection> {
+  final _name = TextEditingController();
+  final _storeUser = TextEditingController();
+  final _storeUrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _storeUser.dispose();
+    _storeUrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: _cyberPanelDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _SectionTitle(number: 'ML', title: 'Tiendas Mercado Libre'),
+          const SizedBox(height: 16),
+          _AdminTextField(
+            controller: _name,
+            label: 'Nombre de tienda',
+            icon: Icons.storefront,
+          ),
+          const SizedBox(height: 12),
+          _AdminTextField(
+            controller: _storeUser,
+            label: 'Usuario o alias en Mercado Libre',
+            icon: Icons.alternate_email,
+          ),
+          const SizedBox(height: 12),
+          _AdminTextField(
+            controller: _storeUrl,
+            label: 'URL de la tienda',
+            icon: Icons.link,
+          ),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: () async {
+              final saved = await widget.onSave(
+                MercadoLibreStoreDraft(
+                  name: _name.text.trim(),
+                  storeUser: _storeUser.text.trim(),
+                  storeUrl: _storeUrl.text.trim(),
+                ),
+              );
+              if (!saved) return;
+              _name.clear();
+              _storeUser.clear();
+              _storeUrl.clear();
+            },
+            icon: const Icon(Icons.add_business),
+            label: const Text('Guardar tienda'),
+          ),
+          if (widget.message != null) ...[
+            const SizedBox(height: 12),
+            _PurchaseMessage(message: widget.message!),
+          ],
+          const SizedBox(height: 20),
+          for (final store in widget.stores)
+            _SimpleInfoTile(
+              icon: Icons.store,
+              title: store.name,
+              subtitle:
+                  '${store.storeUser} - ${store.status} - ${store.storeUrl}',
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AdminTextField extends StatelessWidget {
+  const _AdminTextField({
+    required this.controller,
+    required this.label,
+    required this.icon,
+    this.obscure = false,
+  });
+
+  final TextEditingController controller;
+  final String label;
+  final IconData icon;
+  final bool obscure;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      obscureText: obscure,
+      style: TextStyle(
+        color: _isNeoSkin ? _NeoColors.textPrimary : _CyberColors.textPrimary,
+      ),
+      decoration: _inputDecoration(label: label, hint: label, icon: icon),
+    );
+  }
+}
+
+class _PermissionWrap extends StatelessWidget {
+  const _PermissionWrap({
+    required this.permissions,
+    required this.selected,
+    required this.onChanged,
+  });
+
+  final List<PermissionInfo> permissions;
+  final Set<String> selected;
+  final void Function(String key, bool value) onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final permission in permissions)
+          FilterChip(
+            selected: selected.contains(permission.key),
+            label: Text(permission.label),
+            onSelected: (value) => onChanged(permission.key, value),
+          ),
+      ],
+    );
+  }
+}
+
+class _UserAccessTile extends StatelessWidget {
+  const _UserAccessTile({required this.user, required this.onUpdate});
+
+  final AuthUser user;
+  final Future<void> Function(AuthUser user, String status) onUpdate;
+
+  @override
+  Widget build(BuildContext context) {
+    final nextStatus = user.status == 'active' ? 'inactive' : 'active';
+    return _SimpleInfoTile(
+      icon: Icons.account_circle,
+      title: '${user.username} - ${user.status}',
+      subtitle: '${user.email} - tenant ${user.tenantId ?? '-'}',
+      trailing: OutlinedButton(
+        onPressed: () => onUpdate(user, nextStatus),
+        child: Text(user.status == 'active' ? 'Inactivar' : 'Activar'),
+      ),
+    );
+  }
+}
+
+class _CollaboratorTile extends StatefulWidget {
+  const _CollaboratorTile({
+    required this.user,
+    required this.permissions,
+    required this.onUpdate,
+  });
+
+  final AuthUser user;
+  final List<PermissionInfo> permissions;
+  final Future<void> Function(AuthUser user, List<String> permissions) onUpdate;
+
+  @override
+  State<_CollaboratorTile> createState() => _CollaboratorTileState();
+}
+
+class _CollaboratorTileState extends State<_CollaboratorTile> {
+  late final Set<String> _selected = {...widget.user.permissions};
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: _fieldDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${widget.user.username} - ${widget.user.status}',
+            style: TextStyle(
+              color: _isNeoSkin
+                  ? _NeoColors.textPrimary
+                  : _CyberColors.textPrimary,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            widget.user.email,
+            style: TextStyle(
+              color: _isNeoSkin
+                  ? _NeoColors.textSecondary
+                  : _CyberColors.textSecondary,
+            ),
+          ),
+          const SizedBox(height: 10),
+          _PermissionWrap(
+            permissions: widget.permissions,
+            selected: _selected,
+            onChanged: (key, value) {
+              setState(() {
+                if (value) {
+                  _selected.add(key);
+                } else {
+                  _selected.remove(key);
+                }
+              });
+            },
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: () => widget.onUpdate(widget.user, _selected.toList()),
+            icon: const Icon(Icons.save),
+            label: const Text('Guardar permisos'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SimpleInfoTile extends StatelessWidget {
+  const _SimpleInfoTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    this.trailing,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: _fieldDecoration(),
+      child: Row(
+        children: [
+          Icon(
+            icon,
+            color: _isNeoSkin ? _NeoColors.primary : _CyberColors.secondary,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: _isNeoSkin
+                        ? _NeoColors.textPrimary
+                        : _CyberColors.textPrimary,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    color: _isNeoSkin
+                        ? _NeoColors.textSecondary
+                        : _CyberColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          ?trailing,
+        ],
+      ),
     );
   }
 }
@@ -1403,36 +2433,45 @@ class _SearchPanel extends StatelessWidget {
         children: [
           const _CyberBadge(label: 'COMPARADOR DE PRECIO'),
           const SizedBox(height: 18),
-          const Text(
+          Text(
             'ALIEXPRESS',
             style: TextStyle(
-              color: _CyberColors.textPrimary,
+              color: _isNeoSkin
+                  ? _NeoColors.textPrimary
+                  : _CyberColors.textPrimary,
               fontSize: 48,
               fontWeight: FontWeight.w900,
-              letterSpacing: 2,
               height: 0.95,
             ),
           ),
-          const Text(
+          Text(
             'VS TEMU',
             style: TextStyle(
-              color: _CyberColors.primary,
+              color: _isNeoSkin ? _NeoColors.primary : _CyberColors.primary,
               fontSize: 48,
               fontWeight: FontWeight.w900,
-              letterSpacing: 2,
               height: 1.05,
             ),
           ),
           const SizedBox(height: 12),
-          const Text(
+          Text(
             'Busca el producto, aplica tus filtros y compara por precio total, reputacion y envio.',
-            style: TextStyle(color: _CyberColors.textSecondary, height: 1.6),
+            style: TextStyle(
+              color: _isNeoSkin
+                  ? _NeoColors.textSecondary
+                  : _CyberColors.textSecondary,
+              height: 1.6,
+            ),
           ),
           const SizedBox(height: 24),
           TextField(
             controller: controller,
             onSubmitted: (_) => onRun(),
-            style: const TextStyle(color: _CyberColors.textPrimary),
+            style: TextStyle(
+              color: _isNeoSkin
+                  ? _NeoColors.textPrimary
+                  : _CyberColors.textPrimary,
+            ),
             decoration: _inputDecoration(
               label: 'Nombre del producto',
               hint: 'Ej: audifonos bluetooth, teclado mecanico...',
@@ -1444,10 +2483,14 @@ class _SearchPanel extends StatelessWidget {
             height: 54,
             child: FilledButton.icon(
               style: FilledButton.styleFrom(
-                backgroundColor: _CyberColors.primary,
-                foregroundColor: _CyberColors.bgDarker,
+                backgroundColor: _isNeoSkin
+                    ? _NeoColors.success
+                    : _CyberColors.primary,
+                foregroundColor: _isNeoSkin
+                    ? Colors.white
+                    : _CyberColors.bgDarker,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(_isNeoSkin ? 12 : 8),
                 ),
               ),
               onPressed: isRunning ? null : onRun,
@@ -1630,10 +2673,11 @@ class _MonitorVisual extends StatelessWidget {
               const SizedBox(width: 12),
               Text(
                 isRunning ? 'LIVE SCAN' : 'SEARCH DASHBOARD',
-                style: const TextStyle(
-                  color: _CyberColors.textPrimary,
+                style: TextStyle(
+                  color: _isNeoSkin
+                      ? _NeoColors.textPrimary
+                      : _CyberColors.textPrimary,
                   fontWeight: FontWeight.w900,
-                  letterSpacing: 1.3,
                   fontSize: 12,
                 ),
               ),
@@ -1689,28 +2733,46 @@ class _DashboardMetric extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: _CyberColors.bgDarker.withValues(alpha: 0.7),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _CyberColors.border),
+        color: _isNeoSkin
+            ? _NeoColors.bg
+            : _CyberColors.bgDarker.withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(_isNeoSkin ? 12 : 8),
+        border: Border.all(
+          color: _isNeoSkin ? Colors.transparent : _CyberColors.border,
+        ),
+        boxShadow: _isNeoSkin
+            ? const [
+                BoxShadow(
+                  color: _NeoColors.shadowDark,
+                  blurRadius: 8,
+                  offset: Offset(4, 4),
+                ),
+                BoxShadow(
+                  color: _NeoColors.shadowLight,
+                  blurRadius: 8,
+                  offset: Offset(-4, -4),
+                ),
+              ]
+            : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             label,
-            style: const TextStyle(
-              color: _CyberColors.textSecondary,
+            style: TextStyle(
+              color: _isNeoSkin
+                  ? _NeoColors.textSecondary
+                  : _CyberColors.textSecondary,
               fontWeight: FontWeight.w700,
-              letterSpacing: 0.8,
             ),
           ),
           const SizedBox(height: 10),
           Text(
             value,
-            style: const TextStyle(
-              color: _CyberColors.primary,
+            style: TextStyle(
+              color: _isNeoSkin ? _NeoColors.primary : _CyberColors.primary,
               fontWeight: FontWeight.w900,
-              letterSpacing: 0.8,
             ),
           ),
           const SizedBox(height: 12),
@@ -1719,8 +2781,12 @@ class _DashboardMetric extends StatelessWidget {
             child: LinearProgressIndicator(
               value: progress.clamp(0, 1),
               minHeight: 6,
-              backgroundColor: _CyberColors.bgDark,
-              valueColor: const AlwaysStoppedAnimation(_CyberColors.secondary),
+              backgroundColor: _isNeoSkin
+                  ? _NeoColors.lightEdge
+                  : _CyberColors.bgDark,
+              valueColor: AlwaysStoppedAnimation(
+                _isNeoSkin ? _NeoColors.primary : _CyberColors.secondary,
+              ),
             ),
           ),
         ],
@@ -1776,15 +2842,32 @@ class _CyberBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
       decoration: BoxDecoration(
-        color: _CyberColors.primary.withValues(alpha: 0.1),
+        color: _isNeoSkin
+            ? _NeoColors.bg
+            : _CyberColors.primary.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(30),
-        border: Border.all(color: _CyberColors.primary),
-        boxShadow: [
-          BoxShadow(
-            color: _CyberColors.primary.withValues(alpha: 0.22),
-            blurRadius: 20,
-          ),
-        ],
+        border: Border.all(
+          color: _isNeoSkin ? Colors.transparent : _CyberColors.primary,
+        ),
+        boxShadow: _isNeoSkin
+            ? const [
+                BoxShadow(
+                  color: _NeoColors.shadowDark,
+                  blurRadius: 8,
+                  offset: Offset(4, 4),
+                ),
+                BoxShadow(
+                  color: _NeoColors.shadowLight,
+                  blurRadius: 8,
+                  offset: Offset(-4, -4),
+                ),
+              ]
+            : [
+                BoxShadow(
+                  color: _CyberColors.primary.withValues(alpha: 0.22),
+                  blurRadius: 20,
+                ),
+              ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1792,19 +2875,18 @@ class _CyberBadge extends StatelessWidget {
           Container(
             width: 8,
             height: 8,
-            decoration: const BoxDecoration(
-              color: _CyberColors.primary,
+            decoration: BoxDecoration(
+              color: _isNeoSkin ? _NeoColors.success : _CyberColors.primary,
               shape: BoxShape.circle,
             ),
           ),
           const SizedBox(width: 10),
           Text(
             label,
-            style: const TextStyle(
-              color: _CyberColors.primary,
+            style: TextStyle(
+              color: _isNeoSkin ? _NeoColors.primary : _CyberColors.primary,
               fontSize: 12,
               fontWeight: FontWeight.w900,
-              letterSpacing: 1.5,
             ),
           ),
         ],
@@ -3850,6 +4932,15 @@ class _CyberBackgroundState extends State<_CyberBackground>
   }
 }
 
+class _NeumorphicBackground extends StatelessWidget {
+  const _NeumorphicBackground();
+
+  @override
+  Widget build(BuildContext context) {
+    return const ColoredBox(color: _NeoColors.bg);
+  }
+}
+
 class _CyberBackgroundPainter extends CustomPainter {
   const _CyberBackgroundPainter(this.t);
 
@@ -4546,6 +5637,24 @@ extension ShippingFilterRules on ShippingFilter {
 }
 
 BoxDecoration _cyberPanelDecoration({double radius = 12, bool glow = false}) {
+  if (_isNeoSkin) {
+    return BoxDecoration(
+      color: _NeoColors.surface,
+      borderRadius: BorderRadius.circular(math.max(radius, 20)),
+      boxShadow: [
+        const BoxShadow(
+          color: _NeoColors.shadowDark,
+          blurRadius: 12,
+          offset: Offset(6, 6),
+        ),
+        const BoxShadow(
+          color: _NeoColors.shadowLight,
+          blurRadius: 12,
+          offset: Offset(-6, -6),
+        ),
+      ],
+    );
+  }
   return BoxDecoration(
     color: _CyberColors.card.withValues(alpha: 0.9),
     borderRadius: BorderRadius.circular(radius),
@@ -4566,6 +5675,24 @@ BoxDecoration _cyberPanelDecoration({double radius = 12, bool glow = false}) {
 }
 
 BoxDecoration _fieldDecoration() {
+  if (_isNeoSkin) {
+    return BoxDecoration(
+      color: _NeoColors.bg,
+      borderRadius: BorderRadius.circular(12),
+      boxShadow: const [
+        BoxShadow(
+          color: _NeoColors.shadowDark,
+          blurRadius: 8,
+          offset: Offset(4, 4),
+        ),
+        BoxShadow(
+          color: _NeoColors.shadowLight,
+          blurRadius: 8,
+          offset: Offset(-4, -4),
+        ),
+      ],
+    );
+  }
   return BoxDecoration(
     color: _CyberColors.bgDarker.withValues(alpha: 0.5),
     borderRadius: BorderRadius.circular(8),
@@ -4611,6 +5738,30 @@ InputDecoration _inputDecoration({
   String? errorText,
   Widget? suffixIcon,
 }) {
+  if (_isNeoSkin) {
+    final border = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: BorderSide.none,
+    );
+    return InputDecoration(
+      labelText: label,
+      hintText: hint,
+      prefixIcon: Icon(icon, color: _NeoColors.primary),
+      suffixIcon: suffixIcon,
+      errorText: errorText,
+      errorStyle: const TextStyle(color: _CyberColors.accent),
+      labelStyle: const TextStyle(color: _NeoColors.textSecondary),
+      hintStyle: const TextStyle(color: _NeoColors.textSecondary),
+      filled: true,
+      fillColor: _NeoColors.bg,
+      border: border,
+      enabledBorder: border,
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: _NeoColors.primary, width: 2),
+      ),
+    );
+  }
   return InputDecoration(
     labelText: label,
     hintText: hint,

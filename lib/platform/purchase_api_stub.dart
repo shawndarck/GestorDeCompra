@@ -56,6 +56,103 @@ Future<void> confirmPasswordResetCode({
 
 void logoutAuthUser() {}
 
+Future<List<PermissionInfo>> loadPermissions() async => const [
+  PermissionInfo(key: 'view_sales', label: 'Ver ventas'),
+  PermissionInfo(key: 'view_inventory', label: 'Consultar inventario'),
+  PermissionInfo(key: 'manage_stores', label: 'Gestionar tiendas'),
+  PermissionInfo(key: 'manage_collaborators', label: 'Gestionar colaboradores'),
+];
+
+Future<List<AuthUser>> loadPrincipalUsers() async => const [];
+
+Future<AuthUser> createPrincipalUser({
+  required String username,
+  required String email,
+  required String password,
+  required String profileName,
+  required String phone,
+}) async {
+  return AuthUser(
+    id: DateTime.now().millisecondsSinceEpoch,
+    username: username,
+    email: email,
+    role: 'owner',
+    profileName: profileName,
+    phone: phone,
+  );
+}
+
+Future<AuthUser> updatePrincipalUser({
+  required int id,
+  required String profileName,
+  required String phone,
+  required String status,
+}) async {
+  return AuthUser(
+    id: id,
+    username: 'owner',
+    email: 'owner@pricesec.local',
+    role: 'owner',
+    profileName: profileName,
+    phone: phone,
+    status: status,
+  );
+}
+
+Future<List<AuthUser>> loadCollaborators() async => const [];
+
+Future<AuthUser> createCollaborator({
+  required String username,
+  required String email,
+  required String password,
+  required String profileName,
+  required List<String> permissions,
+}) async {
+  return AuthUser(
+    id: DateTime.now().millisecondsSinceEpoch,
+    username: username,
+    email: email,
+    role: 'collaborator',
+    profileName: profileName,
+    permissions: permissions,
+  );
+}
+
+Future<AuthUser> updateCollaborator({
+  required int id,
+  required String profileName,
+  required String status,
+  required List<String> permissions,
+}) async {
+  return AuthUser(
+    id: id,
+    username: 'collaborator',
+    email: 'collaborator@pricesec.local',
+    role: 'collaborator',
+    profileName: profileName,
+    status: status,
+    permissions: permissions,
+  );
+}
+
+Future<List<MercadoLibreStore>> loadMercadoLibreStores() async => const [];
+
+Future<MercadoLibreStore> saveMercadoLibreStore({
+  int? id,
+  required String name,
+  required String storeUser,
+  required String storeUrl,
+  String status = 'active',
+}) async {
+  return MercadoLibreStore(
+    id: id ?? DateTime.now().millisecondsSinceEpoch,
+    name: name,
+    storeUser: storeUser,
+    storeUrl: storeUrl,
+    status: status,
+  );
+}
+
 Future<List<PurchaseRecord>> loadPurchases() async => const [];
 
 Future<PurchaseRecord> savePurchase(PurchaseDraft draft, {int? id}) async {

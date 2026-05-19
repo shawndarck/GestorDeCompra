@@ -51,6 +51,21 @@ const stores = {
 const setupMessage =
   'Necesitas abrir la ventana PriceSec Chrome, iniciar sesion en las tiendas seleccionadas y volver a comparar.';
 
+const defaultPermissions = [
+  ['view_sales', 'Ver ventas'],
+  ['create_publications', 'Crear publicaciones'],
+  ['edit_publications', 'Editar publicaciones'],
+  ['delete_publications', 'Eliminar publicaciones'],
+  ['view_inventory', 'Consultar inventario'],
+  ['modify_inventory', 'Modificar inventario'],
+  ['manage_stores', 'Gestionar tiendas'],
+  ['manage_collaborators', 'Gestionar colaboradores'],
+  ['view_reports', 'Ver reportes'],
+  ['manage_settings', 'Administrar configuracion'],
+];
+
+const allPermissionKeys = defaultPermissions.map(([key]) => key);
+
 const db = new DatabaseSync(DB_PATH);
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -60,6 +75,11 @@ db.exec(`
     password_hash TEXT NOT NULL,
     salt TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'user',
+    tenant_id INTEGER,
+    parent_user_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'active',
+    profile_name TEXT NOT NULL DEFAULT '',
+    phone TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
@@ -116,6 +136,41 @@ db.exec(`
 `);
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS tenants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_user_id INTEGER,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS permissions (
+    key TEXT PRIMARY KEY,
+    label TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS user_permissions (
+    user_id INTEGER NOT NULL,
+    permission_key TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, permission_key),
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (permission_key) REFERENCES permissions(key)
+  );
+
+  CREATE TABLE IF NOT EXISTS mercado_libre_stores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    store_user TEXT NOT NULL DEFAULT '',
+    store_url TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+  );
+
   CREATE TABLE IF NOT EXISTS aliexpress_viabilities (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     number REAL NOT NULL DEFAULT 0,
@@ -162,6 +217,143 @@ db.exec(`
   )
 `);
 
+function tableColumns(tableName) {
+  return db.prepare(`PRAGMA table_info(${tableName})`).all().map((row) => row.name);
+}
+
+function ensureColumn(tableName, columnName, definition) {
+  if (!tableColumns(tableName).includes(columnName)) {
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  }
+}
+
+function runMigrations() {
+  ensureColumn('users', 'tenant_id', 'INTEGER');
+  ensureColumn('users', 'parent_user_id', 'INTEGER');
+  ensureColumn('users', 'status', "TEXT NOT NULL DEFAULT 'active'");
+  ensureColumn('users', 'profile_name', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('users', 'phone', "TEXT NOT NULL DEFAULT ''");
+  for (const table of ['purchases', 'aliexpress_viabilities', 'inventory_items', 'sales']) {
+    ensureColumn(table, 'tenant_id', 'INTEGER');
+  }
+  for (const [key, label] of defaultPermissions) {
+    db.prepare('INSERT OR IGNORE INTO permissions (key, label) VALUES (?, ?)').run(key, label);
+  }
+}
+
+function ensureTenantForOwner(user) {
+  if (user.tenant_id) return user.tenant_id;
+  const result = db
+    .prepare('INSERT INTO tenants (owner_user_id, name) VALUES (?, ?)')
+    .run(user.id, user.profile_name || user.username);
+  const tenantId = Number(result.lastInsertRowid);
+  db.prepare(
+    'UPDATE users SET tenant_id = ?, role = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+  ).run(tenantId, 'owner', 'active', user.id);
+  db.prepare('UPDATE tenants SET owner_user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
+    user.id,
+    tenantId,
+  );
+  return tenantId;
+}
+
+function backfillLegacyTenant() {
+  const tenantRows = db.prepare('SELECT COUNT(*) AS count FROM tenants').get().count;
+  const owner = db
+    .prepare("SELECT * FROM users WHERE role IN ('owner', 'user') ORDER BY id LIMIT 1")
+    .get();
+  if (!owner && tenantRows > 0) return;
+  let tenantId = owner ? ensureTenantForOwner(owner) : null;
+  if (!tenantId && tenantRows === 0) {
+    const result = db.prepare('INSERT INTO tenants (name, status) VALUES (?, ?)').run(
+      'Tenant legado PriceSec',
+      'active',
+    );
+    tenantId = Number(result.lastInsertRowid);
+  }
+  if (!tenantId) return;
+  db.prepare("UPDATE users SET role = 'owner', tenant_id = ? WHERE role = 'user'").run(tenantId);
+  for (const table of ['purchases', 'aliexpress_viabilities', 'inventory_items', 'sales']) {
+    db.prepare(`UPDATE ${table} SET tenant_id = ? WHERE tenant_id IS NULL`).run(tenantId);
+  }
+}
+
+function seedInitialUsers() {
+  const hasSuperAdmin = db
+    .prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'super_admin'")
+    .get().count;
+  if (!hasSuperAdmin) {
+    const { hash, salt } = hashPassword('PriceSecAdmin2026!');
+    db.prepare(
+      `
+        INSERT INTO users (username, email, password_hash, salt, role, status, profile_name)
+        VALUES (?, ?, ?, ?, 'super_admin', 'active', ?)
+      `,
+    ).run('SHAWNDARCK', 'admin@pricesec.local', hash, salt, 'SHAWNDARCK');
+  }
+  const namedSuperAdmin = db.prepare("SELECT id FROM users WHERE username = 'SHAWNDARCK'").get();
+  if (!namedSuperAdmin) {
+    const { hash, salt } = hashPassword('PriceSecAdmin2026!');
+    db.prepare(
+      `
+        INSERT INTO users (username, email, password_hash, salt, role, status, profile_name)
+        VALUES (?, ?, ?, ?, 'super_admin', 'active', ?)
+      `,
+    ).run('SHAWNDARCK', 'admin@pricesec.local', hash, salt, 'SHAWNDARCK');
+  }
+
+  if (process.env.PRICESEC_SEED_EXAMPLES === 'false') return;
+  let owner = db.prepare("SELECT * FROM users WHERE username = 'cliente_demo'").get();
+  if (!owner) {
+    createPrincipalUser({
+      username: 'cliente_demo',
+      email: 'cliente.demo@pricesec.local',
+      password: 'ClienteDemo2026!',
+      profileName: 'Cliente demo PriceSec',
+      phone: '3000000000',
+    });
+    owner = db.prepare("SELECT * FROM users WHERE username = 'cliente_demo'").get();
+  }
+  if (owner) {
+    const storeCount = db
+      .prepare('SELECT COUNT(*) AS count FROM mercado_libre_stores WHERE tenant_id = ?')
+      .get(owner.tenant_id).count;
+    if (storeCount === 0) {
+      createMercadoLibreStore(
+        { role: 'owner', id: owner.id, tenant_id: owner.tenant_id },
+        {
+          name: 'Tienda Demo Principal',
+          storeUser: 'cliente_demo_meli',
+          storeUrl: 'https://www.mercadolibre.com.co/perfil/cliente_demo',
+        },
+      );
+      createMercadoLibreStore(
+        { role: 'owner', id: owner.id, tenant_id: owner.tenant_id },
+        {
+          name: 'Tienda Demo Outlet',
+          storeUser: 'cliente_demo_outlet',
+          storeUrl: 'https://www.mercadolibre.com.co/perfil/cliente_demo_outlet',
+        },
+      );
+    }
+    const collaboratorExists = db.prepare("SELECT id FROM users WHERE username = 'colaborador_demo'").get();
+    if (!collaboratorExists) {
+      createCollaborator(
+        { role: 'owner', id: owner.id, tenant_id: owner.tenant_id },
+        {
+          username: 'colaborador_demo',
+          email: 'colaborador.demo@pricesec.local',
+          password: 'Colaborador2026!',
+          profileName: 'Colaborador demo',
+          permissions: ['view_inventory', 'view_sales', 'view_reports'],
+        },
+      );
+    }
+  }
+}
+
+runMigrations();
+
 function json(res, status, body) {
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
@@ -198,11 +390,19 @@ function verifyPassword(password, user) {
 }
 
 function publicUser(row) {
+  const permissions = permissionsForUser(row);
   return {
     id: row.id,
     username: row.username,
     email: row.email,
     role: row.role,
+    tenantId: row.tenant_id ?? null,
+    parentUserId: row.parent_user_id ?? null,
+    status: row.status ?? 'active',
+    profileName: row.profile_name ?? '',
+    phone: row.phone ?? '',
+    permissions,
+    stores: row.tenant_id ? listMercadoLibreStores(row) : [],
   };
 }
 
@@ -227,6 +427,7 @@ function getAuthUser(req) {
         JOIN users ON users.id = user_sessions.user_id
         WHERE user_sessions.token_hash = ?
           AND user_sessions.expires_at > CURRENT_TIMESTAMP
+          AND users.status = 'active'
       `,
     )
     .get(hashToken(token));
@@ -242,6 +443,39 @@ function requireAuth(req, res) {
   return user;
 }
 
+function permissionsForUser(user) {
+  if (!user) return [];
+  if (user.role === 'super_admin' || user.role === 'owner') return allPermissionKeys;
+  return db
+    .prepare('SELECT permission_key FROM user_permissions WHERE user_id = ? ORDER BY permission_key')
+    .all(user.id)
+    .map((row) => row.permission_key);
+}
+
+function hasPermission(user, permissionKey) {
+  if (!permissionKey) return true;
+  if (user.role === 'super_admin' || user.role === 'owner') return true;
+  return permissionsForUser(user).includes(permissionKey);
+}
+
+function requireRole(user, roles) {
+  const allowed = Array.isArray(roles) ? roles : [roles];
+  if (!allowed.includes(user.role)) {
+    throw new Error('No tienes permisos para realizar esta accion.');
+  }
+}
+
+function requirePermission(user, permissionKey) {
+  if (!hasPermission(user, permissionKey)) {
+    throw new Error('No tienes permisos para realizar esta accion.');
+  }
+}
+
+function requireTenant(user) {
+  if (!user.tenant_id) throw new Error('Este usuario no tiene tenant asociado.');
+  return user.tenant_id;
+}
+
 function registerUser(input) {
   const username = String(input.username ?? '').trim();
   const email = String(input.email ?? '').trim().toLowerCase();
@@ -252,17 +486,22 @@ function registerUser(input) {
   }
   if (password.length < 8) throw new Error('La contraseña debe tener minimo 8 caracteres.');
   const userCount = db.prepare('SELECT COUNT(*) AS count FROM users').get().count;
-  const role = userCount === 0 ? 'super_admin' : 'user';
+  if (userCount > 0) {
+    throw new Error('Solo el Super Admin puede crear nuevos usuarios principales.');
+  }
   const { hash, salt } = hashPassword(password);
   const result = db
     .prepare(
       `
-        INSERT INTO users (username, email, password_hash, salt, role)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO users (username, email, password_hash, salt, role, status, profile_name)
+        VALUES (?, ?, ?, ?, 'super_admin', 'active', ?)
       `,
     )
-    .run(username, email, hash, salt, role);
+    .run(username, email, hash, salt, username);
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(result.lastInsertRowid));
+  if (user.status !== 'active') {
+    throw new Error('Este usuario esta inactivo.');
+  }
   return createSession(user);
 }
 
@@ -274,6 +513,9 @@ function loginUser(input) {
     .get(username, username.toLowerCase());
   if (!user || !verifyPassword(password, user)) {
     throw new Error('Usuario o contraseña incorrectos.');
+  }
+  if (user.status !== 'active') {
+    throw new Error('Este usuario esta inactivo.');
   }
   return createSession(user);
 }
@@ -351,6 +593,224 @@ function confirmPasswordReset(input) {
   );
   db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(user.id);
   return { ok: true };
+}
+
+function normalizePermissionList(input) {
+  const values = Array.isArray(input) ? input : [];
+  return [...new Set(values.map(String).filter((key) => allPermissionKeys.includes(key)))];
+}
+
+function listPermissions() {
+  return db.prepare('SELECT key, label FROM permissions ORDER BY label').all();
+}
+
+function createPrincipalUser(input) {
+  const username = String(input.username ?? '').trim();
+  const email = String(input.email ?? '').trim().toLowerCase();
+  const password = String(input.password ?? '');
+  const profileName = String(input.profileName ?? input.profile_name ?? username).trim();
+  const phone = String(input.phone ?? '').trim();
+  if (username.length < 3) throw new Error('El usuario debe tener minimo 3 caracteres.');
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('Escribe un correo valido.');
+  if (password.length < 8) throw new Error('La contrasena debe tener minimo 8 caracteres.');
+  const { hash, salt } = hashPassword(password);
+  const userResult = db
+    .prepare(
+      `
+        INSERT INTO users (
+          username, email, password_hash, salt, role, status, profile_name, phone
+        ) VALUES (?, ?, ?, ?, 'owner', 'active', ?, ?)
+      `,
+    )
+    .run(username, email, hash, salt, profileName, phone);
+  const userId = Number(userResult.lastInsertRowid);
+  const tenantResult = db
+    .prepare('INSERT INTO tenants (owner_user_id, name, status) VALUES (?, ?, ?)')
+    .run(userId, profileName || username, 'active');
+  const tenantId = Number(tenantResult.lastInsertRowid);
+  db.prepare('UPDATE users SET tenant_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
+    tenantId,
+    userId,
+  );
+  return {
+    ...publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(userId)),
+    tenantId,
+  };
+}
+
+function listPrincipalUsers() {
+  return db
+    .prepare(
+      `
+        SELECT users.*, tenants.name AS tenant_name
+        FROM users
+        LEFT JOIN tenants ON tenants.id = users.tenant_id
+        WHERE users.role = 'owner'
+        ORDER BY users.created_at DESC, users.id DESC
+      `,
+    )
+    .all()
+    .map((row) => ({ ...publicUser(row), tenantName: row.tenant_name ?? '' }));
+}
+
+function updatePrincipalUser(id, input) {
+  const row = db.prepare("SELECT * FROM users WHERE id = ? AND role = 'owner'").get(id);
+  if (!row) throw new Error('Usuario principal no encontrado.');
+  const profileName = String(input.profileName ?? input.profile_name ?? row.profile_name ?? '').trim();
+  const phone = String(input.phone ?? row.phone ?? '').trim();
+  const status = String(input.status ?? row.status ?? 'active');
+  if (!['active', 'inactive'].includes(status)) throw new Error('Estado invalido.');
+  db.prepare(
+    `
+      UPDATE users
+      SET profile_name = ?, phone = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `,
+  ).run(profileName, phone, status, id);
+  if (row.tenant_id) {
+    db.prepare('UPDATE tenants SET name = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
+      profileName || row.username,
+      status,
+      row.tenant_id,
+    );
+  }
+  return publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(id));
+}
+
+function createCollaborator(user, input) {
+  const tenantId = requireTenant(user);
+  requirePermission(user, 'manage_collaborators');
+  const username = String(input.username ?? '').trim();
+  const email = String(input.email ?? '').trim().toLowerCase();
+  const password = String(input.password ?? '');
+  const profileName = String(input.profileName ?? input.profile_name ?? username).trim();
+  const permissions = normalizePermissionList(input.permissions);
+  if (username.length < 3) throw new Error('El usuario debe tener minimo 3 caracteres.');
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('Escribe un correo valido.');
+  if (password.length < 8) throw new Error('La contrasena debe tener minimo 8 caracteres.');
+  const { hash, salt } = hashPassword(password);
+  const result = db
+    .prepare(
+      `
+        INSERT INTO users (
+          username, email, password_hash, salt, role, tenant_id, parent_user_id,
+          status, profile_name
+        ) VALUES (?, ?, ?, ?, 'collaborator', ?, ?, 'active', ?)
+      `,
+    )
+    .run(username, email, hash, salt, tenantId, user.id, profileName);
+  const collaboratorId = Number(result.lastInsertRowid);
+  setUserPermissions(collaboratorId, permissions);
+  return publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(collaboratorId));
+}
+
+function listCollaborators(user) {
+  const tenantId = requireTenant(user);
+  requirePermission(user, 'manage_collaborators');
+  return db
+    .prepare(
+      `
+        SELECT * FROM users
+        WHERE role = 'collaborator' AND tenant_id = ?
+        ORDER BY created_at DESC, id DESC
+      `,
+    )
+    .all(tenantId)
+    .map(publicUser);
+}
+
+function setUserPermissions(userId, permissions) {
+  db.prepare('DELETE FROM user_permissions WHERE user_id = ?').run(userId);
+  for (const permission of normalizePermissionList(permissions)) {
+    db.prepare('INSERT OR IGNORE INTO user_permissions (user_id, permission_key) VALUES (?, ?)').run(
+      userId,
+      permission,
+    );
+  }
+}
+
+function updateCollaborator(user, id, input) {
+  const tenantId = requireTenant(user);
+  requirePermission(user, 'manage_collaborators');
+  const collaborator = db
+    .prepare("SELECT * FROM users WHERE id = ? AND role = 'collaborator' AND tenant_id = ?")
+    .get(id, tenantId);
+  if (!collaborator) throw new Error('Colaborador no encontrado.');
+  const profileName = String(input.profileName ?? input.profile_name ?? collaborator.profile_name ?? '').trim();
+  const status = String(input.status ?? collaborator.status ?? 'active');
+  if (!['active', 'inactive'].includes(status)) throw new Error('Estado invalido.');
+  db.prepare(
+    'UPDATE users SET profile_name = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+  ).run(profileName, status, id);
+  if (Array.isArray(input.permissions)) setUserPermissions(id, input.permissions);
+  return publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(id));
+}
+
+function mercadoLibreStoreFromRow(row) {
+  return {
+    id: row.id,
+    tenantId: row.tenant_id,
+    name: row.name,
+    storeUser: row.store_user,
+    storeUrl: row.store_url,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function listMercadoLibreStores(user) {
+  if (!user?.tenant_id) return [];
+  return db
+    .prepare('SELECT * FROM mercado_libre_stores WHERE tenant_id = ? ORDER BY id DESC')
+    .all(user.tenant_id)
+    .map(mercadoLibreStoreFromRow);
+}
+
+function createMercadoLibreStore(user, input) {
+  const tenantId = requireTenant(user);
+  requirePermission(user, 'manage_stores');
+  const name = String(input.name ?? '').trim();
+  const storeUser = String(input.storeUser ?? input.store_user ?? '').trim();
+  const storeUrl = String(input.storeUrl ?? input.store_url ?? '').trim();
+  if (!name) throw new Error('El nombre de la tienda es obligatorio.');
+  const result = db
+    .prepare(
+      `
+        INSERT INTO mercado_libre_stores (tenant_id, name, store_user, store_url, status)
+        VALUES (?, ?, ?, ?, 'active')
+      `,
+    )
+    .run(tenantId, name, storeUser, storeUrl);
+  return mercadoLibreStoreFromRow(
+    db.prepare('SELECT * FROM mercado_libre_stores WHERE id = ?').get(Number(result.lastInsertRowid)),
+  );
+}
+
+function updateMercadoLibreStore(user, id, input) {
+  const tenantId = requireTenant(user);
+  requirePermission(user, 'manage_stores');
+  const current = db
+    .prepare('SELECT * FROM mercado_libre_stores WHERE id = ? AND tenant_id = ?')
+    .get(id, tenantId);
+  if (!current) throw new Error('Tienda no encontrada.');
+  const status = String(input.status ?? current.status ?? 'active');
+  if (!['active', 'inactive'].includes(status)) throw new Error('Estado invalido.');
+  db.prepare(
+    `
+      UPDATE mercado_libre_stores
+      SET name = ?, store_user = ?, store_url = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND tenant_id = ?
+    `,
+  ).run(
+    String(input.name ?? current.name).trim(),
+    String(input.storeUser ?? input.store_user ?? current.store_user).trim(),
+    String(input.storeUrl ?? input.store_url ?? current.store_url).trim(),
+    status,
+    id,
+    tenantId,
+  );
+  return mercadoLibreStoreFromRow(db.prepare('SELECT * FROM mercado_libre_stores WHERE id = ?').get(id));
 }
 
 function smtpConfigured() {
@@ -783,26 +1243,32 @@ function purchaseFromRow(row) {
   };
 }
 
-function listPurchases() {
+function listPurchases(user) {
+  const tenantId = requireTenant(user);
+  requirePermission(user, 'view_reports');
   return db
-    .prepare('SELECT * FROM purchases ORDER BY updated_at DESC, id DESC')
-    .all()
+    .prepare('SELECT * FROM purchases WHERE tenant_id = ? ORDER BY updated_at DESC, id DESC')
+    .all(tenantId)
     .map(purchaseFromRow);
 }
 
-function createPurchase(input) {
+function createPurchase(input, user) {
+  const tenantId = requireTenant(user);
+  requirePermission(user, 'create_publications');
   const purchase = normalizePurchase(input);
   if (!purchase.productName) throw new Error('El nombre del producto es obligatorio.');
   const result = db
     .prepare(`
       INSERT INTO purchases (
+        tenant_id,
         product_name, price_usd, trm, quantity, origin_shipping_usd,
         card_commission_rate, height_cm, width_cm, length_cm, box_count,
         cbm_rate, national_freight, mercado_libre_price,
         mercado_libre_commission_rate
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     .run(
+      tenantId,
       purchase.productName,
       purchase.priceUsd,
       purchase.trm,
@@ -818,10 +1284,11 @@ function createPurchase(input) {
       purchase.mercadoLibrePrice,
       purchase.mercadoLibreCommissionRate,
     );
-  return getPurchase(Number(result.lastInsertRowid));
+  return getPurchase(Number(result.lastInsertRowid), user);
 }
 
-function updatePurchase(id, input) {
+function updatePurchase(id, input, user) {
+  requirePermission(user, 'edit_publications');
   const purchase = normalizePurchase(input);
   if (!purchase.productName) throw new Error('El nombre del producto es obligatorio.');
   db.prepare(`
@@ -841,7 +1308,7 @@ function updatePurchase(id, input) {
       mercado_libre_price = ?,
       mercado_libre_commission_rate = ?,
       updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
+    WHERE id = ? AND tenant_id = ?
   `).run(
     purchase.productName,
     purchase.priceUsd,
@@ -858,18 +1325,20 @@ function updatePurchase(id, input) {
     purchase.mercadoLibrePrice,
     purchase.mercadoLibreCommissionRate,
     id,
+    requireTenant(user),
   );
-  return getPurchase(id);
+  return getPurchase(id, user);
 }
 
-function getPurchase(id) {
-  const row = db.prepare('SELECT * FROM purchases WHERE id = ?').get(id);
+function getPurchase(id, user) {
+  const row = db.prepare('SELECT * FROM purchases WHERE id = ? AND tenant_id = ?').get(id, requireTenant(user));
   if (!row) throw new Error('Compra no encontrada.');
   return purchaseFromRow(row);
 }
 
-function removePurchase(id) {
-  db.prepare('DELETE FROM purchases WHERE id = ?').run(id);
+function removePurchase(id, user) {
+  requirePermission(user, 'delete_publications');
+  db.prepare('DELETE FROM purchases WHERE id = ? AND tenant_id = ?').run(id, requireTenant(user));
 }
 
 function normalizeAliExpressViability(input) {
@@ -910,25 +1379,31 @@ function aliExpressViabilityFromRow(row) {
   };
 }
 
-function listAliExpressViabilities() {
+function listAliExpressViabilities(user) {
+  const tenantId = requireTenant(user);
+  requirePermission(user, 'view_reports');
   return db
-    .prepare('SELECT * FROM aliexpress_viabilities ORDER BY updated_at DESC, id DESC')
-    .all()
+    .prepare('SELECT * FROM aliexpress_viabilities WHERE tenant_id = ? ORDER BY updated_at DESC, id DESC')
+    .all(tenantId)
     .map(aliExpressViabilityFromRow);
 }
 
-function createAliExpressViability(input) {
+function createAliExpressViability(input, user) {
+  const tenantId = requireTenant(user);
+  requirePermission(user, 'create_publications');
   const record = normalizeAliExpressViability(input);
   if (!record.productName) throw new Error('El nombre del producto es obligatorio.');
   const result = db
     .prepare(`
       INSERT INTO aliexpress_viabilities (
+        tenant_id,
         number, product_name, product_link, order_home_cost, quantity,
         unit_home_cost, mercado_libre_total_price, meli_commission_rate,
         commission_free_price, viability
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     .run(
+      tenantId,
       record.number,
       record.productName,
       record.productLink,
@@ -940,10 +1415,11 @@ function createAliExpressViability(input) {
       record.commissionFreePrice,
       record.viability,
     );
-  return getAliExpressViability(Number(result.lastInsertRowid));
+  return getAliExpressViability(Number(result.lastInsertRowid), user);
 }
 
-function updateAliExpressViability(id, input) {
+function updateAliExpressViability(id, input, user) {
+  requirePermission(user, 'edit_publications');
   const record = normalizeAliExpressViability(input);
   if (!record.productName) throw new Error('El nombre del producto es obligatorio.');
   db.prepare(`
@@ -959,7 +1435,7 @@ function updateAliExpressViability(id, input) {
       commission_free_price = ?,
       viability = ?,
       updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
+    WHERE id = ? AND tenant_id = ?
   `).run(
     record.number,
     record.productName,
@@ -972,18 +1448,25 @@ function updateAliExpressViability(id, input) {
     record.commissionFreePrice,
     record.viability,
     id,
+    requireTenant(user),
   );
-  return getAliExpressViability(id);
+  return getAliExpressViability(id, user);
 }
 
-function getAliExpressViability(id) {
-  const row = db.prepare('SELECT * FROM aliexpress_viabilities WHERE id = ?').get(id);
+function getAliExpressViability(id, user) {
+  const row = db
+    .prepare('SELECT * FROM aliexpress_viabilities WHERE id = ? AND tenant_id = ?')
+    .get(id, requireTenant(user));
   if (!row) throw new Error('Viabilidad no encontrada.');
   return aliExpressViabilityFromRow(row);
 }
 
-function removeAliExpressViability(id) {
-  db.prepare('DELETE FROM aliexpress_viabilities WHERE id = ?').run(id);
+function removeAliExpressViability(id, user) {
+  requirePermission(user, 'delete_publications');
+  db.prepare('DELETE FROM aliexpress_viabilities WHERE id = ? AND tenant_id = ?').run(
+    id,
+    requireTenant(user),
+  );
 }
 
 function normalizeInventoryItem(input) {
@@ -1011,14 +1494,18 @@ function inventoryItemFromRow(row) {
   };
 }
 
-function listInventoryItems() {
+function listInventoryItems(user) {
+  const tenantId = requireTenant(user);
+  requirePermission(user, 'view_inventory');
   return db
-    .prepare('SELECT * FROM inventory_items ORDER BY updated_at DESC, id DESC')
-    .all()
+    .prepare('SELECT * FROM inventory_items WHERE tenant_id = ? ORDER BY updated_at DESC, id DESC')
+    .all(tenantId)
     .map(inventoryItemFromRow);
 }
 
-function createInventoryItem(input) {
+function createInventoryItem(input, user) {
+  const tenantId = requireTenant(user);
+  requirePermission(user, 'modify_inventory');
   const item = normalizeInventoryItem(input);
   if (!item.productName) throw new Error('El nombre del producto es obligatorio.');
   if (!item.warehouse) throw new Error('La bodega es obligatoria.');
@@ -1030,12 +1517,14 @@ function createInventoryItem(input) {
     .prepare(
       `
         INSERT INTO inventory_items (
+          tenant_id,
           product_name, unit_purchase_value, quantity, public_sale_value,
           loaded_at, warehouse
-        ) VALUES (?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
       `,
     )
     .run(
+      tenantId,
       item.productName,
       item.unitPurchaseValue,
       item.quantity,
@@ -1043,17 +1532,21 @@ function createInventoryItem(input) {
       item.loadedAt,
       item.warehouse,
     );
-  return getInventoryItem(Number(result.lastInsertRowid));
+  return getInventoryItem(Number(result.lastInsertRowid), user);
 }
 
-function getInventoryItem(id) {
-  const row = db.prepare('SELECT * FROM inventory_items WHERE id = ?').get(id);
+function getInventoryItem(id, user) {
+  const row = db.prepare('SELECT * FROM inventory_items WHERE id = ? AND tenant_id = ?').get(
+    id,
+    requireTenant(user),
+  );
   if (!row) throw new Error('Producto de inventario no encontrado.');
   return inventoryItemFromRow(row);
 }
 
-function removeInventoryItem(id) {
-  db.prepare('DELETE FROM inventory_items WHERE id = ?').run(id);
+function removeInventoryItem(id, user) {
+  requirePermission(user, 'modify_inventory');
+  db.prepare('DELETE FROM inventory_items WHERE id = ? AND tenant_id = ?').run(id, requireTenant(user));
 }
 
 function saleFromRow(row) {
@@ -1072,11 +1565,19 @@ function saleFromRow(row) {
   };
 }
 
-function listSales() {
-  return db.prepare('SELECT * FROM sales ORDER BY sold_at DESC, id DESC').all().map(saleFromRow);
+function listSales(user) {
+  const tenantId = requireTenant(user);
+  requirePermission(user, 'view_sales');
+  return db
+    .prepare('SELECT * FROM sales WHERE tenant_id = ? ORDER BY sold_at DESC, id DESC')
+    .all(tenantId)
+    .map(saleFromRow);
 }
 
-function createSale(input) {
+function createSale(input, user) {
+  const tenantId = requireTenant(user);
+  requirePermission(user, 'view_sales');
+  requirePermission(user, 'modify_inventory');
   const inventoryItemId = Number(input.inventoryItemId ?? 0);
   const soldAt = String(input.soldAt ?? '').trim();
   const quantity = number(input.quantity);
@@ -1085,7 +1586,7 @@ function createSale(input) {
   if (!soldAt) throw new Error('La fecha de venta es obligatoria.');
   if (quantity <= 0 || unitSaleValue <= 0) throw new Error('Cantidad y precio deben ser mayores que 0.');
 
-  const item = getInventoryItem(inventoryItemId);
+  const item = getInventoryItem(inventoryItemId, user);
   if (quantity > item.quantity) throw new Error('No hay suficiente inventario en esa bodega.');
   const remaining = item.quantity - quantity;
   const total = quantity * unitSaleValue;
@@ -1093,18 +1594,20 @@ function createSale(input) {
   db.exec('BEGIN');
   try {
     db.prepare(
-      'UPDATE inventory_items SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-    ).run(remaining, inventoryItemId);
+      'UPDATE inventory_items SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND tenant_id = ?',
+    ).run(remaining, inventoryItemId, tenantId);
     const result = db
       .prepare(
         `
           INSERT INTO sales (
+            tenant_id,
             inventory_item_id, product_name, warehouse, sold_at, quantity,
             unit_sale_value, total_sale_value, remaining_quantity
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
+        tenantId,
         item.id,
         item.productName,
         item.warehouse,
@@ -1126,6 +1629,9 @@ function createSale(input) {
     throw error;
   }
 }
+
+backfillLegacyTenant();
+seedInitialUsers();
 
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') return json(res, 200, {});
@@ -1180,12 +1686,95 @@ const server = http.createServer(async (req, res) => {
   }
   const user = requireAuth(req, res);
   if (!user) return;
+  if (req.url === '/permissions' && req.method === 'GET') {
+    return json(res, 200, { permissions: listPermissions() });
+  }
+  if (req.url === '/admin/principal-users' && req.method === 'GET') {
+    try {
+      requireRole(user, 'super_admin');
+      return json(res, 200, { users: listPrincipalUsers() });
+    } catch (error) {
+      return json(res, 403, { message: error?.message ?? 'No autorizado.' });
+    }
+  }
+  if (req.url === '/admin/principal-users' && req.method === 'POST') {
+    try {
+      requireRole(user, 'super_admin');
+      return json(res, 200, { user: createPrincipalUser(await readJson(req)) });
+    } catch (error) {
+      return json(res, 400, { message: error?.message ?? 'No pude crear usuario.' });
+    }
+  }
+  const principalUserMatch = req.url.match(/^\/admin\/principal-users\/(\d+)$/);
+  if (principalUserMatch && req.method === 'PUT') {
+    try {
+      requireRole(user, 'super_admin');
+      return json(res, 200, {
+        user: updatePrincipalUser(Number(principalUserMatch[1]), await readJson(req)),
+      });
+    } catch (error) {
+      return json(res, 400, { message: error?.message ?? 'No pude actualizar usuario.' });
+    }
+  }
+  if (req.url === '/collaborators' && req.method === 'GET') {
+    try {
+      return json(res, 200, { collaborators: listCollaborators(user) });
+    } catch (error) {
+      return json(res, 403, { message: error?.message ?? 'No autorizado.' });
+    }
+  }
+  if (req.url === '/collaborators' && req.method === 'POST') {
+    try {
+      return json(res, 200, { collaborator: createCollaborator(user, await readJson(req)) });
+    } catch (error) {
+      return json(res, 400, { message: error?.message ?? 'No pude crear colaborador.' });
+    }
+  }
+  const collaboratorMatch = req.url.match(/^\/collaborators\/(\d+)$/);
+  if (collaboratorMatch && req.method === 'PUT') {
+    try {
+      return json(res, 200, {
+        collaborator: updateCollaborator(user, Number(collaboratorMatch[1]), await readJson(req)),
+      });
+    } catch (error) {
+      return json(res, 400, { message: error?.message ?? 'No pude actualizar colaborador.' });
+    }
+  }
+  if (req.url === '/mercado-libre-stores' && req.method === 'GET') {
+    try {
+      requirePermission(user, 'manage_stores');
+      return json(res, 200, { stores: listMercadoLibreStores(user) });
+    } catch (error) {
+      return json(res, 403, { message: error?.message ?? 'No autorizado.' });
+    }
+  }
+  if (req.url === '/mercado-libre-stores' && req.method === 'POST') {
+    try {
+      return json(res, 200, { store: createMercadoLibreStore(user, await readJson(req)) });
+    } catch (error) {
+      return json(res, 400, { message: error?.message ?? 'No pude crear tienda.' });
+    }
+  }
+  const storeMatch = req.url.match(/^\/mercado-libre-stores\/(\d+)$/);
+  if (storeMatch && req.method === 'PUT') {
+    try {
+      return json(res, 200, {
+        store: updateMercadoLibreStore(user, Number(storeMatch[1]), await readJson(req)),
+      });
+    } catch (error) {
+      return json(res, 400, { message: error?.message ?? 'No pude actualizar tienda.' });
+    }
+  }
   if (req.url === '/purchases' && req.method === 'GET') {
-    return json(res, 200, { purchases: listPurchases() });
+    try {
+      return json(res, 200, { purchases: listPurchases(user) });
+    } catch (error) {
+      return json(res, 403, { message: error?.message ?? 'No autorizado.' });
+    }
   }
   if (req.url === '/purchases' && req.method === 'POST') {
     try {
-      return json(res, 200, { purchase: createPurchase(await readJson(req)) });
+      return json(res, 200, { purchase: createPurchase(await readJson(req), user) });
     } catch (error) {
       return json(res, 400, { message: error?.message ?? 'No pude guardar.' });
     }
@@ -1194,24 +1783,32 @@ const server = http.createServer(async (req, res) => {
   if (purchaseMatch && req.method === 'PUT') {
     try {
       return json(res, 200, {
-        purchase: updatePurchase(Number(purchaseMatch[1]), await readJson(req)),
+        purchase: updatePurchase(Number(purchaseMatch[1]), await readJson(req), user),
       });
     } catch (error) {
       return json(res, 400, { message: error?.message ?? 'No pude actualizar.' });
     }
   }
   if (purchaseMatch && req.method === 'DELETE') {
-    removePurchase(Number(purchaseMatch[1]));
+    try {
+      removePurchase(Number(purchaseMatch[1]), user);
+    } catch (error) {
+      return json(res, 403, { message: error?.message ?? 'No autorizado.' });
+    }
     return json(res, 200, { ok: true });
   }
   if (req.url === '/aliexpress-viabilities' && req.method === 'GET') {
     // Seccion independiente del segundo Excel: no comparte datos con purchases.
-    return json(res, 200, { records: listAliExpressViabilities() });
+    try {
+      return json(res, 200, { records: listAliExpressViabilities(user) });
+    } catch (error) {
+      return json(res, 403, { message: error?.message ?? 'No autorizado.' });
+    }
   }
   if (req.url === '/aliexpress-viabilities' && req.method === 'POST') {
     try {
       return json(res, 200, {
-        record: createAliExpressViability(await readJson(req)),
+        record: createAliExpressViability(await readJson(req), user),
       });
     } catch (error) {
       return json(res, 400, { message: error?.message ?? 'No pude guardar.' });
@@ -1224,6 +1821,7 @@ const server = http.createServer(async (req, res) => {
         record: updateAliExpressViability(
           Number(viabilityMatch[1]),
           await readJson(req),
+          user,
         ),
       });
     } catch (error) {
@@ -1231,30 +1829,46 @@ const server = http.createServer(async (req, res) => {
     }
   }
   if (viabilityMatch && req.method === 'DELETE') {
-    removeAliExpressViability(Number(viabilityMatch[1]));
+    try {
+      removeAliExpressViability(Number(viabilityMatch[1]), user);
+    } catch (error) {
+      return json(res, 403, { message: error?.message ?? 'No autorizado.' });
+    }
     return json(res, 200, { ok: true });
   }
   if (req.url === '/inventory' && req.method === 'GET') {
-    return json(res, 200, { items: listInventoryItems() });
+    try {
+      return json(res, 200, { items: listInventoryItems(user) });
+    } catch (error) {
+      return json(res, 403, { message: error?.message ?? 'No autorizado.' });
+    }
   }
   if (req.url === '/inventory' && req.method === 'POST') {
     try {
-      return json(res, 200, { item: createInventoryItem(await readJson(req)) });
+      return json(res, 200, { item: createInventoryItem(await readJson(req), user) });
     } catch (error) {
       return json(res, 400, { message: error?.message ?? 'No pude guardar inventario.' });
     }
   }
   const inventoryMatch = req.url.match(/^\/inventory\/(\d+)$/);
   if (inventoryMatch && req.method === 'DELETE') {
-    removeInventoryItem(Number(inventoryMatch[1]));
+    try {
+      removeInventoryItem(Number(inventoryMatch[1]), user);
+    } catch (error) {
+      return json(res, 403, { message: error?.message ?? 'No autorizado.' });
+    }
     return json(res, 200, { ok: true });
   }
   if (req.url === '/sales' && req.method === 'GET') {
-    return json(res, 200, { sales: listSales() });
+    try {
+      return json(res, 200, { sales: listSales(user) });
+    } catch (error) {
+      return json(res, 403, { message: error?.message ?? 'No autorizado.' });
+    }
   }
   if (req.url === '/sales' && req.method === 'POST') {
     try {
-      const created = createSale(await readJson(req));
+      const created = createSale(await readJson(req), user);
       return json(res, 200, {
         sale: saleFromRow(created.sale),
         lowStock: created.lowStock,
@@ -1268,6 +1882,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
+    requireTenant(user);
+    requirePermission(user, 'create_publications');
     const body = await readJson(req);
     const product = String(body.product ?? '').trim();
     const selectedStores = Array.isArray(body?.filters?.stores)
