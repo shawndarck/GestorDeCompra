@@ -279,20 +279,9 @@ function backfillLegacyTenant() {
 }
 
 function seedInitialUsers() {
-  const hasSuperAdmin = db
-    .prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'super_admin'")
-    .get().count;
-  if (!hasSuperAdmin) {
-    const { hash, salt } = hashPassword('PriceSecAdmin2026!');
-    db.prepare(
-      `
-        INSERT INTO users (username, email, password_hash, salt, role, status, profile_name)
-        VALUES (?, ?, ?, ?, 'super_admin', 'active', ?)
-      `,
-    ).run('SHAWNDARCK', 'admin@pricesec.local', hash, salt, 'SHAWNDARCK');
-  }
-  const namedSuperAdmin = db.prepare("SELECT id FROM users WHERE username = 'SHAWNDARCK'").get();
-  if (!namedSuperAdmin) {
+  const seedAdmin = process.env.PRICESEC_SEED_ADMIN === 'true';
+  const seedExamples = process.env.PRICESEC_SEED_EXAMPLES === 'true';
+  if (seedAdmin && !db.prepare("SELECT id FROM users WHERE username = 'SHAWNDARCK'").get()) {
     const { hash, salt } = hashPassword('PriceSecAdmin2026!');
     db.prepare(
       `
@@ -302,7 +291,7 @@ function seedInitialUsers() {
     ).run('SHAWNDARCK', 'admin@pricesec.local', hash, salt, 'SHAWNDARCK');
   }
 
-  if (process.env.PRICESEC_SEED_EXAMPLES === 'false') return;
+  if (!seedExamples) return;
   let owner = db.prepare("SELECT * FROM users WHERE username = 'cliente_demo'").get();
   if (!owner) {
     createPrincipalUser({

@@ -35,6 +35,7 @@ migrate_working_dir/
 .pricesec-chrome-profile/
 pricesec.db
 pricesec.db-*
+pricesec.backup-*.db
 scripts/pricesec.env.ps1
 
 # Symbolication related

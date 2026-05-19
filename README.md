@@ -468,6 +468,10 @@ SQLite se crea automaticamente en:
 pricesec.db
 ```
 
+`pricesec.db` no se sube al repositorio. Cada PC crea su propia base local limpia
+al levantar el backend por primera vez. En una base nueva, la pantalla inicial
+permite crear el primer Super Admin de esa instalacion.
+
 Tablas principales:
 
 ```text
@@ -585,7 +589,17 @@ view_reports
 manage_settings
 ```
 
-Datos semilla locales para pruebas:
+Datos semilla locales opcionales para pruebas:
+
+Por defecto, una base nueva queda vacia para que el primer registro creado desde
+la pantalla `Super Admin` pertenezca al usuario de esa instalacion. Si quieres
+cargar datos demo, levanta el backend con:
+
+```powershell
+$env:PRICESEC_SEED_ADMIN="true"
+$env:PRICESEC_SEED_EXAMPLES="true"
+.\scripts\start_pricesec.ps1
+```
 
 ```text
 Super Admin global
@@ -607,7 +621,8 @@ Permisos: view_inventory, view_sales, view_reports
 
 Flujo de prueba recomendado:
 
-1. Inicia sesion como `SHAWNDARCK`.
+1. En una base limpia, crea tu propio Super Admin desde la app. Si activaste las
+   semillas demo, inicia sesion como `SHAWNDARCK`.
 2. Abre `Usuarios principales`.
 3. Crea un usuario principal. El backend crea su tenant aislado.
 4. Cierra sesion e inicia con ese usuario principal.
