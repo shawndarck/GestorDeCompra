@@ -1,4 +1,4 @@
-// ignore_for_file: avoid_web_libraries_in_flutter, deprecated_member_use
+// ignore_for_file: avoid_web_libraries_in_flutter, deprecated_member_use, unused_element
 
 import 'dart:async';
 import 'dart:convert';
@@ -355,9 +355,21 @@ Future<AliExpressViabilityRecord> saveAliExpressViability(
     return AliExpressViabilityRecord.fromJson(
       body['record'] as Map<String, dynamic>,
     );
-  } catch (_) {
-    return _saveLocalViability(draft, id: id);
+  } catch (error) {
+    throw Exception(error.toString());
   }
+}
+
+Future<InventoryItemRecord> markViabilityPurchased(int id) async {
+  final request = await _request(
+    '$_baseUrl/aliexpress-viabilities/$id/purchase',
+    method: 'POST',
+  );
+  final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
+  if (request.status != 200) {
+    throw Exception(body['message'] as String? ?? 'No pude marcar comprado.');
+  }
+  return InventoryItemRecord.fromJson(body['item'] as Map<String, dynamic>);
 }
 
 Future<void> deleteAliExpressViability(int id) async {
@@ -404,6 +416,28 @@ Future<InventoryItemRecord> saveInventoryItem(InventoryItemDraft draft) async {
     );
   }
   return InventoryItemRecord.fromJson(body['item'] as Map<String, dynamic>);
+}
+
+Future<InventoryItemRecord> receiveInventoryItem(int id, String warehouse) async {
+  final request = await _request(
+    '$_baseUrl/inventory/$id/receive',
+    method: 'POST',
+    requestHeaders: {'Content-Type': 'application/json'},
+    sendData: jsonEncode({'warehouse': warehouse}),
+  );
+  final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
+  if (request.status != 200) {
+    throw Exception(body['message'] as String? ?? 'No pude recibir inventario.');
+  }
+  return InventoryItemRecord.fromJson(body['item'] as Map<String, dynamic>);
+}
+
+Future<List<String>> loadWarehouses() async {
+  final request = await _request('$_baseUrl/warehouses');
+  final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
+  return (body['warehouses'] as List<dynamic>? ?? const [])
+      .whereType<String>()
+      .toList();
 }
 
 Future<void> deleteInventoryItem(int id) async {

@@ -82,7 +82,7 @@ Future<html.HttpRequest> _searchRequest(String url, String payload) async {
   });
   request.send(payload);
   try {
-    return await completer.future.timeout(const Duration(seconds: 35));
+    return await completer.future.timeout(const Duration(seconds: 90));
   } on TimeoutException {
     throw const ProductSearchException(
       'La busqueda tardo demasiado. Revisa la ventana de Chrome de PriceSec y vuelve a intentar.',

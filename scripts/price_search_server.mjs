@@ -18,6 +18,7 @@ const SMTP_FROM = process.env.PRICESEC_SMTP_FROM ?? SMTP_USER;
 const ROOT = path.resolve(import.meta.dirname, '..');
 const PROFILE_DIR = path.join(ROOT, '.pricesec-chrome-profile');
 const DB_PATH = path.join(ROOT, 'pricesec.db');
+const COMPARISON_STORES_LIMIT = 3;
 const CHROME_PATHS = [
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
@@ -183,6 +184,7 @@ db.exec(`
     meli_commission_rate REAL NOT NULL DEFAULT 0,
     commission_free_price REAL NOT NULL DEFAULT 0,
     viability REAL NOT NULL DEFAULT 0,
+    purchase_status TEXT NOT NULL DEFAULT 'pending',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )
@@ -198,6 +200,8 @@ db.exec(`
     loaded_at TEXT NOT NULL,
     warehouse TEXT NOT NULL,
     created_by_user_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'available',
+    source_viability_id INTEGER,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
@@ -216,6 +220,30 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (inventory_item_id) REFERENCES inventory_items(id)
   )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS inventory_movements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    inventory_item_id INTEGER,
+    source_viability_id INTEGER,
+    movement_type TEXT NOT NULL,
+    product_name TEXT NOT NULL,
+    warehouse TEXT NOT NULL DEFAULT '',
+    quantity REAL NOT NULL DEFAULT 0,
+    unit_purchase_value REAL NOT NULL DEFAULT 0,
+    public_sale_value REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT '',
+    created_by_user_id INTEGER,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS warehouse_locations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 function tableColumns(tableName) {
@@ -238,9 +266,44 @@ function runMigrations() {
     ensureColumn(table, 'tenant_id', 'INTEGER');
   }
   ensureColumn('inventory_items', 'created_by_user_id', 'INTEGER');
+  ensureColumn('inventory_items', 'status', "TEXT NOT NULL DEFAULT 'available'");
+  ensureColumn('inventory_items', 'source_viability_id', 'INTEGER');
+  ensureColumn('aliexpress_viabilities', 'purchase_status', "TEXT NOT NULL DEFAULT 'pending'");
   for (const [key, label] of defaultPermissions) {
     db.prepare('INSERT OR IGNORE INTO permissions (key, label) VALUES (?, ?)').run(key, label);
   }
+  seedWarehouseLocations();
+}
+
+const colombiaWarehouseLocations = [
+  'Bogota', 'Medellin', 'Cali', 'Barranquilla', 'Cartagena', 'Cucuta',
+  'Bucaramanga', 'Pereira', 'Santa Marta', 'Ibague', 'Manizales', 'Pasto',
+  'Neiva', 'Villavicencio', 'Armenia', 'Monteria', 'Sincelejo', 'Valledupar',
+  'Popayan', 'Tunja', 'Riohacha', 'Quibdo', 'Florencia', 'Yopal', 'Mocoa',
+  'Leticia', 'Arauca', 'San Andres', 'Inirida', 'Mitú', 'Puerto Carreno',
+  'Soacha', 'Bello', 'Itagui', 'Envigado', 'Sabaneta', 'Rionegro', 'Apartado',
+  'Turbo', 'Caucasia', 'Girardota', 'Copacabana', 'La Estrella', 'Caldas',
+  'Palmira', 'Buenaventura', 'Tuluá', 'Buga', 'Jamundi', 'Yumbo', 'Cartago',
+  'Zipaquira', 'Chia', 'Facatativa', 'Fusagasuga', 'Girardot', 'Mosquera',
+  'Madrid', 'Funza', 'Cajica', 'Cota', 'Tocancipa', 'Sogamoso', 'Duitama',
+  'Chiquinquira', 'Paipa', 'Garagoa', 'Acacias', 'Granada', 'Puerto Lopez',
+  'San Jose del Guaviare', 'La Dorada', 'Chinchina', 'Riosucio', 'Salamina',
+  'Dosquebradas', 'Santa Rosa de Cabal', 'La Virginia', 'Calarca',
+  'Montenegro', 'Quimbaya', 'Circasia', 'Barrancabermeja', 'Floridablanca',
+  'Giron', 'Piedecuesta', 'San Gil', 'Socorro', 'Malaga', 'Ocaña',
+  'Pamplona', 'Villa del Rosario', 'Los Patios', 'Tierralta', 'Cereté',
+  'Lorica', 'Sahagun', 'Planeta Rica', 'Corozal', 'San Marcos', 'Magangue',
+  'Turbaco', 'Arjona', 'El Carmen de Bolivar', 'Maicao', 'Fonseca',
+  'San Juan del Cesar', 'Cienaga', 'Fundacion', 'El Banco', 'Aguachica',
+  'Bosconia', 'La Jagua de Ibirico', 'Ipiales', 'Tumaco', 'Tuquerres',
+  'Sibundoy', 'Santander de Quilichao', 'Puerto Tejada', 'Piendamo',
+  'La Plata', 'Garzon', 'Pitalito', 'Campoalegre', 'Melgar', 'Espinal',
+  'Honda', 'Chaparral', 'Mariquita', 'Fresno', 'Rovira'
+];
+
+function seedWarehouseLocations() {
+  const insert = db.prepare('INSERT OR IGNORE INTO warehouse_locations (name) VALUES (?)');
+  for (const name of colombiaWarehouseLocations) insert.run(name);
 }
 
 function ensureTenantForOwner(user) {
@@ -922,6 +985,7 @@ async function ensureChrome() {
       `--user-data-dir=${PROFILE_DIR}`,
       '--no-first-run',
       '--no-default-browser-check',
+      '--new-window',
       'about:blank',
     ],
     { detached: true, stdio: 'ignore' },
@@ -952,7 +1016,51 @@ async function createTab(url) {
   );
   if (!response.ok) throw new Error(setupMessage);
   const tab = await response.json();
+  if (!tab.webSocketDebuggerUrl) throw new Error(setupMessage);
   return tab.webSocketDebuggerUrl;
+}
+
+async function listChromeTargets() {
+  try {
+    const response = await fetch(`http://127.0.0.1:${CDP_PORT}/json/list`);
+    if (!response.ok) return [];
+    return await response.json();
+  } catch {
+    return [];
+  }
+}
+
+function isComparisonTarget(target) {
+  if (target.type !== 'page') return false;
+  const targetUrl = String(target.url ?? '');
+  try {
+    const host = new URL(targetUrl).hostname.toLowerCase();
+    return ['aliexpress', 'temu', 'shein', 'amazon'].some((domain) =>
+      host.includes(domain),
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function closeChromeTarget(id) {
+  try {
+    await fetch(`http://127.0.0.1:${CDP_PORT}/json/close/${encodeURIComponent(id)}`);
+  } catch {
+    // Closing stale comparison tabs is a best-effort cleanup.
+  }
+}
+
+async function closeComparisonTabs() {
+  const targets = await listChromeTargets();
+  const comparisonTargets = targets.filter(isComparisonTarget);
+  await Promise.allSettled(comparisonTargets.map((target) => closeChromeTarget(target.id)));
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    const remaining = (await listChromeTargets()).filter(isComparisonTarget);
+    if (!remaining.length) return;
+    await delay(200);
+  }
 }
 
 class CdpClient {
@@ -1021,6 +1129,7 @@ async function scrapeStore(storeKey, product) {
   try {
     await client.send('Page.enable');
     await client.send('Runtime.enable');
+    await client.send('Page.bringToFront').catch(() => null);
     const loaded = client.waitFor('Page.loadEventFired', 25000).catch(() => null);
     await client.send('Page.navigate', { url });
     await loaded;
@@ -1108,12 +1217,13 @@ function extractionExpression(storeKey, storeLabel) {
         .join(' ');
       const text = normalize([card.innerText, anchor.innerText, imageText].filter(Boolean).join(' '));
       const price = parsePrice(text);
-      if (text.length < 12 || !price) continue;
+      if (text.length < 12) continue;
       const title = normalize(anchor.getAttribute('title') || anchor.innerText || imageText || text).slice(0, 90);
       results.push({
         store: '${storeKey}',
         title: title || '${storeLabel} resultado',
         totalPrice: price,
+        priceVisible: price > 0,
         rating: parseRating(text),
         sales: parseSales(text),
         shippingIncluded: hasFreeShipping(text),
@@ -1131,13 +1241,13 @@ function filterResults(results, filters) {
   const minSales = Number(filters?.minSales ?? 0);
   const shippingFilter = filters?.shippingFilter ?? 'included';
   return results.filter((result) => {
-    if (!result.totalPrice || !result.listingUrl) return false;
+    if (!result.listingUrl) return false;
     if (result.rating > 0 && result.rating < minRating) return false;
     if (result.sales > 0 && result.sales < minSales) return false;
-    if (shippingFilter === 'included' && !result.shippingIncluded) return false;
+    if (shippingFilter === 'included' && result.priceVisible !== false && !result.shippingIncluded) return false;
     if (shippingFilter === 'notIncluded' && result.shippingIncluded) return false;
     return true;
-  }).sort((a, b) => a.totalPrice - b.totalPrice);
+  }).sort((a, b) => (a.totalPrice || Number.MAX_SAFE_INTEGER) - (b.totalPrice || Number.MAX_SAFE_INTEGER));
 }
 
 function delay(ms) {
@@ -1369,6 +1479,7 @@ function aliExpressViabilityFromRow(row) {
     meliCommissionRate: row.meli_commission_rate,
     commissionFreePrice: row.commission_free_price,
     viability: row.viability,
+    purchaseStatus: row.purchase_status ?? 'pending',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -1388,6 +1499,9 @@ function createAliExpressViability(input, user) {
   requirePermission(user, 'create_publications');
   const record = normalizeAliExpressViability(input);
   if (!record.productName) throw new Error('El nombre del producto es obligatorio.');
+  if (record.viability < 2) {
+    throw new Error('No se puede guardar: el puntaje de viabilidad es menor a 2 y no es un producto viable para compra.');
+  }
   const result = db
     .prepare(`
       INSERT INTO aliexpress_viabilities (
@@ -1417,6 +1531,9 @@ function updateAliExpressViability(id, input, user) {
   requirePermission(user, 'edit_publications');
   const record = normalizeAliExpressViability(input);
   if (!record.productName) throw new Error('El nombre del producto es obligatorio.');
+  if (record.viability < 2) {
+    throw new Error('No se puede guardar: el puntaje de viabilidad es menor a 2 y no es un producto viable para compra.');
+  }
   db.prepare(`
     UPDATE aliexpress_viabilities SET
       number = ?,
@@ -1486,9 +1603,45 @@ function inventoryItemFromRow(row) {
     warehouse: row.warehouse,
     createdByUserId: row.created_by_user_id ?? null,
     createdByUsername: row.created_by_username ?? row.created_by_profile ?? '',
+    status: row.status ?? 'available',
+    sourceViabilityId: row.source_viability_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function createInventoryMovement({
+  tenantId,
+  inventoryItemId = null,
+  sourceViabilityId = null,
+  movementType,
+  productName,
+  warehouse = '',
+  quantity = 0,
+  unitPurchaseValue = 0,
+  publicSaleValue = 0,
+  status = '',
+  userId = null,
+}) {
+  db.prepare(`
+    INSERT INTO inventory_movements (
+      tenant_id, inventory_item_id, source_viability_id, movement_type,
+      product_name, warehouse, quantity, unit_purchase_value, public_sale_value,
+      status, created_by_user_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    tenantId,
+    inventoryItemId,
+    sourceViabilityId,
+    movementType,
+    productName,
+    warehouse,
+    quantity,
+    unitPurchaseValue,
+    publicSaleValue,
+    status,
+    userId,
+  );
 }
 
 function listInventoryItems(user) {
@@ -1522,8 +1675,8 @@ function createInventoryItem(input, user) {
         INSERT INTO inventory_items (
           tenant_id,
           product_name, unit_purchase_value, quantity, public_sale_value,
-          loaded_at, warehouse, created_by_user_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          loaded_at, warehouse, created_by_user_id, status, source_viability_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     )
     .run(
@@ -1535,8 +1688,24 @@ function createInventoryItem(input, user) {
       item.loadedAt,
       item.warehouse,
       user.id,
+      String(input.status ?? 'available'),
+      input.sourceViabilityId ? Number(input.sourceViabilityId) : null,
     );
-  return getInventoryItem(Number(result.lastInsertRowid), user);
+  const inventoryId = Number(result.lastInsertRowid);
+  createInventoryMovement({
+    tenantId,
+    inventoryItemId: inventoryId,
+    sourceViabilityId: input.sourceViabilityId ? Number(input.sourceViabilityId) : null,
+    movementType: 'created',
+    productName: item.productName,
+    warehouse: item.warehouse,
+    quantity: item.quantity,
+    unitPurchaseValue: item.unitPurchaseValue,
+    publicSaleValue: item.publicSaleValue,
+    status: String(input.status ?? 'available'),
+    userId: user.id,
+  });
+  return getInventoryItem(inventoryId, user);
 }
 
 function getInventoryItem(id, user) {
@@ -1555,6 +1724,112 @@ function getInventoryItem(id, user) {
 function removeInventoryItem(id, user) {
   requirePermission(user, 'modify_inventory');
   db.prepare('DELETE FROM inventory_items WHERE id = ? AND tenant_id = ?').run(id, requireTenant(user));
+}
+
+function markViabilityPurchased(id, user) {
+  const tenantId = requireTenant(user);
+  requirePermission(user, 'modify_inventory');
+  const record = getAliExpressViability(id, user);
+  if (record.viability < 2) {
+    throw new Error('No se puede comprar: el puntaje de viabilidad es menor a 2.');
+  }
+  if ((record.purchaseStatus ?? 'pending') === 'purchased') {
+    throw new Error('Esta viabilidad ya fue marcada como comprada.');
+  }
+  const result = db.prepare(`
+    INSERT INTO inventory_items (
+      tenant_id, product_name, unit_purchase_value, quantity, public_sale_value,
+      loaded_at, warehouse, created_by_user_id, status, source_viability_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    tenantId,
+    record.productName,
+    record.unitHomeCost,
+    record.quantity,
+    record.mercadoLibreTotalPrice,
+    new Date().toISOString().slice(0, 10),
+    'En transito',
+    user.id,
+    'in_transit',
+    record.id,
+  );
+  const inventoryId = Number(result.lastInsertRowid);
+  db.prepare(`
+    UPDATE aliexpress_viabilities
+    SET purchase_status = 'purchased', updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND tenant_id = ?
+  `).run(id, tenantId);
+  createInventoryMovement({
+    tenantId,
+    inventoryItemId: inventoryId,
+    sourceViabilityId: record.id,
+    movementType: 'purchased_from_viability',
+    productName: record.productName,
+    warehouse: 'En transito',
+    quantity: record.quantity,
+    unitPurchaseValue: record.unitHomeCost,
+    publicSaleValue: record.mercadoLibreTotalPrice,
+    status: 'in_transit',
+    userId: user.id,
+  });
+  return getInventoryItem(inventoryId, user);
+}
+
+function receiveInventoryItem(id, input, user) {
+  const tenantId = requireTenant(user);
+  requirePermission(user, 'modify_inventory');
+  const warehouse = String(input.warehouse ?? '').trim();
+  if (!warehouse) throw new Error('Selecciona la bodega donde se recibio el producto.');
+  const item = getInventoryItem(id, user);
+  db.prepare(`
+    UPDATE inventory_items
+    SET status = 'available', warehouse = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND tenant_id = ?
+  `).run(warehouse, id, tenantId);
+  createInventoryMovement({
+    tenantId,
+    inventoryItemId: id,
+    sourceViabilityId: item.sourceViabilityId,
+    movementType: 'received',
+    productName: item.productName,
+    warehouse,
+    quantity: item.quantity,
+    unitPurchaseValue: item.unitPurchaseValue,
+    publicSaleValue: item.publicSaleValue,
+    status: 'available',
+    userId: user.id,
+  });
+  return getInventoryItem(id, user);
+}
+
+function listInventoryMovements(user) {
+  const tenantId = requireTenant(user);
+  requirePermission(user, 'view_inventory');
+  return db.prepare(`
+    SELECT inventory_movements.*, users.username AS created_by_username
+    FROM inventory_movements
+    LEFT JOIN users ON users.id = inventory_movements.created_by_user_id
+    WHERE inventory_movements.tenant_id = ?
+    ORDER BY inventory_movements.created_at DESC, inventory_movements.id DESC
+    LIMIT 500
+  `).all(tenantId).map((row) => ({
+    id: row.id,
+    inventoryItemId: row.inventory_item_id,
+    sourceViabilityId: row.source_viability_id,
+    movementType: row.movement_type,
+    productName: row.product_name,
+    warehouse: row.warehouse,
+    quantity: row.quantity,
+    unitPurchaseValue: row.unit_purchase_value,
+    publicSaleValue: row.public_sale_value,
+    status: row.status,
+    createdByUsername: row.created_by_username ?? '',
+    createdAt: row.created_at,
+  }));
+}
+
+function listWarehouseLocations() {
+  return db.prepare('SELECT name FROM warehouse_locations ORDER BY name').all().map((row) => row.name);
 }
 
 function saleFromRow(row) {
@@ -1823,6 +2098,16 @@ const server = http.createServer(async (req, res) => {
     }
   }
   const viabilityMatch = req.url.match(/^\/aliexpress-viabilities\/(\d+)$/);
+  const viabilityPurchaseMatch = req.url.match(/^\/aliexpress-viabilities\/(\d+)\/purchase$/);
+  if (viabilityPurchaseMatch && req.method === 'POST') {
+    try {
+      return json(res, 200, {
+        item: markViabilityPurchased(Number(viabilityPurchaseMatch[1]), user),
+      });
+    } catch (error) {
+      return json(res, 400, { message: error?.message ?? 'No pude marcar como comprado.' });
+    }
+  }
   if (viabilityMatch && req.method === 'PUT') {
     try {
       return json(res, 200, {
@@ -1851,6 +2136,16 @@ const server = http.createServer(async (req, res) => {
       return json(res, 403, { message: error?.message ?? 'No autorizado.' });
     }
   }
+  if (req.url === '/inventory/movements' && req.method === 'GET') {
+    try {
+      return json(res, 200, { movements: listInventoryMovements(user) });
+    } catch (error) {
+      return json(res, 400, { message: error?.message ?? 'No pude listar movimientos.' });
+    }
+  }
+  if (req.url === '/warehouses' && req.method === 'GET') {
+    return json(res, 200, { warehouses: listWarehouseLocations() });
+  }
   if (req.url === '/inventory' && req.method === 'POST') {
     try {
       return json(res, 200, { item: createInventoryItem(await readJson(req), user) });
@@ -1859,6 +2154,16 @@ const server = http.createServer(async (req, res) => {
     }
   }
   const inventoryMatch = req.url.match(/^\/inventory\/(\d+)$/);
+  const inventoryReceiveMatch = req.url.match(/^\/inventory\/(\d+)\/receive$/);
+  if (inventoryReceiveMatch && req.method === 'POST') {
+    try {
+      return json(res, 200, {
+        item: receiveInventoryItem(Number(inventoryReceiveMatch[1]), await readJson(req), user),
+      });
+    } catch (error) {
+      return json(res, 400, { message: error?.message ?? 'No pude marcar como recibido.' });
+    }
+  }
   if (inventoryMatch && req.method === 'DELETE') {
     try {
       removeInventoryItem(Number(inventoryMatch[1]), user);
@@ -1894,15 +2199,16 @@ const server = http.createServer(async (req, res) => {
     requirePermission(user, 'create_publications');
     const body = await readJson(req);
     const product = String(body.product ?? '').trim();
-    const selectedStores = Array.isArray(body?.filters?.stores)
+    const selectedStores = (Array.isArray(body?.filters?.stores)
       ? body.filters.stores.filter((store) => stores[store])
-      : ['aliexpress', 'temu'];
+      : ['aliexpress', 'temu', 'shein']).slice(0, COMPARISON_STORES_LIMIT);
     if (!product) return json(res, 400, { message: 'Escribe un producto.' });
     if (!selectedStores.length) {
       return json(res, 400, { message: 'Selecciona al menos una tienda.' });
     }
 
     await ensureChrome();
+    await closeComparisonTabs();
 
     const settled = await Promise.allSettled(
       selectedStores.map((store) => scrapeStore(store, product)),

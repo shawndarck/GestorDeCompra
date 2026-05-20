@@ -289,7 +289,11 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
   double _minRating = 4.5;
   int _minSales = 100;
   ShippingFilter _shippingFilter = ShippingFilter.included;
-  Set<StoreOption> _selectedStores = {StoreOption.aliexpress, StoreOption.temu};
+  Set<StoreOption> _selectedStores = {
+    StoreOption.aliexpress,
+    StoreOption.temu,
+    StoreOption.shein,
+  };
   ProductResult? _bestResult;
   List<ProductResult> _results = const [];
   List<PurchaseRecord> _purchases = const [];
@@ -315,6 +319,7 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
   double? _currentTrm;
   bool _isLoadingCurrentTrm = false;
   int _trmRevision = 0;
+  List<String> _warehouseOptions = const [];
 
   SearchFilters get _filters => SearchFilters(
     minRating: _minRating,
@@ -507,13 +512,16 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
                           message: _viabilityMessage,
                           onEdit: _startEditViability,
                           onDelete: _deleteAliExpressViability,
+                          onMarkPurchased: _markViabilityPurchased,
                         )
                       else if (_activeTab == 5)
                         _InventorySection(
                           items: _inventoryItems,
+                          warehouses: _warehouseOptions,
                           message: _inventoryMessage,
                           onSave: _saveInventoryItem,
                           onDelete: _deleteInventoryItem,
+                          onReceive: _receiveInventoryItem,
                         )
                       else if (_activeTab == 6)
                         _SalesSection(
@@ -655,6 +663,11 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
         if (stores.length == 1) return;
         stores.remove(store);
       } else {
+        if (stores.length >= 3) {
+          _statusMessage =
+              'Puedes comparar maximo 3 tiendas a la vez. Desmarca una para elegir otra.';
+          return;
+        }
         stores.add(store);
       }
       _selectedStores = stores;
@@ -734,8 +747,12 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
   Future<void> _loadInventoryItems() async {
     try {
       final items = await loadInventoryItems();
+      final warehouses = await loadWarehouses();
       if (!mounted) return;
-      setState(() => _inventoryItems = items);
+      setState(() {
+        _inventoryItems = items;
+        _warehouseOptions = warehouses;
+      });
     } catch (error) {
       if (!mounted) return;
       setState(() => _inventoryMessage = _cleanError(error));
@@ -819,6 +836,12 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
 
   Future<bool> _saveAliExpressViability(AliExpressViabilityDraft draft) async {
     try {
+      final viability = AliExpressViabilityCalculations.fromDraft(draft).viability;
+      if (viability < 2) {
+        throw Exception(
+          'No se puede guardar: el puntaje de viabilidad es menor a 2 y no es un producto viable para compra.',
+        );
+      }
       await saveAliExpressViability(draft, id: _editingViabilityId);
       final records = await loadAliExpressViabilities();
       if (!mounted) return false;
@@ -1035,6 +1058,42 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _viabilityMessage = _cleanError(error));
+    }
+  }
+
+  Future<void> _markViabilityPurchased(AliExpressViabilityRecord record) async {
+    try {
+      await markViabilityPurchased(record.id);
+      final records = await loadAliExpressViabilities();
+      final items = await loadInventoryItems();
+      if (!mounted) return;
+      setState(() {
+        _viabilityRecords = records;
+        _inventoryItems = items;
+        _viabilityMessage =
+            'Producto marcado como comprado y enviado al inventario en transito.';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _viabilityMessage = _cleanError(error));
+    }
+  }
+
+  Future<void> _receiveInventoryItem(
+    InventoryItemRecord item,
+    String warehouse,
+  ) async {
+    try {
+      await receiveInventoryItem(item.id, warehouse);
+      final items = await loadInventoryItems();
+      if (!mounted) return;
+      setState(() {
+        _inventoryItems = items;
+        _inventoryMessage = 'Producto recibido en $warehouse.';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _inventoryMessage = _cleanError(error));
     }
   }
 
@@ -3003,7 +3062,7 @@ class _BestOptionCard extends StatelessWidget {
           const SizedBox(width: 12),
           Expanded(
             child: Text(
-              'Mejor opcion: ${result.store.label} por ${formatCop(result.totalPrice)}',
+              'Mejor opcion: ${result.store.label} por ${result.priceLabel}',
               style: const TextStyle(fontWeight: FontWeight.w900),
             ),
           ),
@@ -3096,7 +3155,7 @@ class _ResultRow extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     Text(
-                      formatCop(result.totalPrice),
+                      result.priceLabel,
                       style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w900,
@@ -3701,6 +3760,13 @@ class _AliExpressViabilitySectionState
           ),
           const SizedBox(height: 18),
           _AliExpressViabilityGrid(calculations: calculations),
+          if (calculations.viability < 2) ...[
+            const SizedBox(height: 10),
+            const _PurchaseMessage(
+              message:
+                  'No se permite guardar: el puntaje es menor a 2 y no es viable para compra.',
+            ),
+          ],
           const SizedBox(height: 16),
           Row(
             children: [
@@ -3759,6 +3825,11 @@ class _AliExpressViabilitySectionState
 
   Future<void> _submit(AliExpressViabilityDraft draft) async {
     final errors = _validateViability();
+    final calculations = AliExpressViabilityCalculations.fromDraft(draft);
+    if (calculations.viability < 2) {
+      errors['mercadoLibreTotalPrice'] =
+          'Viabilidad menor a 2. No se puede guardar.';
+    }
     if (errors.isNotEmpty) {
       setState(() {
         _errors
@@ -3885,12 +3956,14 @@ class _SavedViabilitiesSection extends StatelessWidget {
     required this.message,
     required this.onEdit,
     required this.onDelete,
+    required this.onMarkPurchased,
   });
 
   final List<AliExpressViabilityRecord> records;
   final String? message;
   final ValueChanged<AliExpressViabilityRecord> onEdit;
   final ValueChanged<int> onDelete;
+  final ValueChanged<AliExpressViabilityRecord> onMarkPurchased;
 
   @override
   Widget build(BuildContext context) {
@@ -3910,6 +3983,7 @@ class _SavedViabilitiesSection extends StatelessWidget {
             records: records,
             onEdit: onEdit,
             onDelete: onDelete,
+            onMarkPurchased: onMarkPurchased,
           ),
         ],
       ),
@@ -3920,15 +3994,19 @@ class _SavedViabilitiesSection extends StatelessWidget {
 class _InventorySection extends StatefulWidget {
   const _InventorySection({
     required this.items,
+    required this.warehouses,
     required this.message,
     required this.onSave,
     required this.onDelete,
+    required this.onReceive,
   });
 
   final List<InventoryItemRecord> items;
+  final List<String> warehouses;
   final String? message;
   final Future<bool> Function(InventoryItemDraft draft) onSave;
   final ValueChanged<int> onDelete;
+  final void Function(InventoryItemRecord item, String warehouse) onReceive;
 
   @override
   State<_InventorySection> createState() => _InventorySectionState();
@@ -3973,7 +4051,7 @@ class _InventorySectionState extends State<_InventorySection> {
       widget.items.map((item) => item.productName),
     );
     final warehouses = _uniqueInventoryValues(
-      widget.items.map((item) => item.warehouse),
+      [...widget.warehouses, ...widget.items.map((item) => item.warehouse)],
     );
     final filtered = widget.items.where((item) {
       return _smartMatches(_searchController.text, [
@@ -4064,7 +4142,12 @@ class _InventorySectionState extends State<_InventorySection> {
               ),
             ],
             ...filtered.map(
-              (item) => _InventoryRow(item: item, onDelete: widget.onDelete),
+              (item) => _InventoryRow(
+                item: item,
+                warehouses: warehouses,
+                onDelete: widget.onDelete,
+                onReceive: widget.onReceive,
+              ),
             ),
         ],
       ),
@@ -4217,10 +4300,17 @@ class _InventorySectionState extends State<_InventorySection> {
 }
 
 class _InventoryRow extends StatelessWidget {
-  const _InventoryRow({required this.item, required this.onDelete});
+  const _InventoryRow({
+    required this.item,
+    required this.warehouses,
+    required this.onDelete,
+    required this.onReceive,
+  });
 
   final InventoryItemRecord item;
+  final List<String> warehouses;
   final ValueChanged<int> onDelete;
+  final void Function(InventoryItemRecord item, String warehouse) onReceive;
 
   @override
   Widget build(BuildContext context) {
@@ -4249,7 +4339,7 @@ class _InventoryRow extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  'Bodega: ${item.warehouse} | Cantidad: ${_formatInputNumber(item.quantity)} | Compra: ${formatCop(item.unitPurchaseValue.round())} | Venta: ${formatCop(item.publicSaleValue.round())}',
+                  'Estado: ${item.statusLabel} | Bodega: ${item.warehouse} | Cantidad: ${_formatInputNumber(item.quantity)} | Compra: ${formatCop(item.unitPurchaseValue.round())} | Venta: ${formatCop(item.publicSaleValue.round())}',
                   style: const TextStyle(color: _CyberColors.textSecondary),
                 ),
                 const SizedBox(height: 4),
@@ -4263,10 +4353,57 @@ class _InventoryRow extends StatelessWidget {
               ],
             ),
           ),
+          if (item.status == 'in_transit')
+            IconButton(
+              tooltip: 'Marcar recibido',
+              onPressed: () => _showReceiveDialog(context),
+              icon: const Icon(Icons.move_to_inbox, color: _CyberColors.primary),
+            ),
           IconButton(
             tooltip: 'Eliminar',
             onPressed: () => onDelete(item.id),
             icon: const Icon(Icons.delete, color: _CyberColors.accent),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showReceiveDialog(BuildContext context) {
+    final controller = TextEditingController();
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Recibir producto'),
+        content: Autocomplete<String>(
+          optionsBuilder: (value) {
+            final query = value.text.trim();
+            if (query.isEmpty) return warehouses.take(10);
+            return warehouses.where((item) => _smartMatches(query, [item])).take(10);
+          },
+          onSelected: (value) => controller.text = value,
+          fieldViewBuilder: (context, textController, focusNode, onSubmit) {
+            return TextField(
+              controller: textController,
+              focusNode: focusNode,
+              onChanged: (value) => controller.text = value,
+              decoration: const InputDecoration(labelText: 'Bodega de destino'),
+            );
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final warehouse = controller.text.trim();
+              if (warehouse.isEmpty) return;
+              Navigator.pop(context);
+              onReceive(item, warehouse);
+            },
+            child: const Text('Recibir'),
           ),
         ],
       ),
@@ -4458,6 +4595,7 @@ class _InventorySummaryRow extends StatelessWidget {
       ),
     );
   }
+
 }
 
 class _InventoryAggregate {
@@ -4826,11 +4964,13 @@ class _ViabilitiesList extends StatefulWidget {
     required this.records,
     required this.onEdit,
     required this.onDelete,
+    required this.onMarkPurchased,
   });
 
   final List<AliExpressViabilityRecord> records;
   final ValueChanged<AliExpressViabilityRecord> onEdit;
   final ValueChanged<int> onDelete;
+  final ValueChanged<AliExpressViabilityRecord> onMarkPurchased;
 
   @override
   State<_ViabilitiesList> createState() => _ViabilitiesListState();
@@ -4920,6 +5060,27 @@ class _ViabilitiesListState extends State<_ViabilitiesList> {
                           ),
                         ),
                       ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Abrir producto',
+                    onPressed: record.draft.productLink.trim().isEmpty
+                        ? null
+                        : () => openExternalUrl(record.draft.productLink),
+                    icon: const Icon(Icons.open_in_new, color: _CyberColors.primary),
+                  ),
+                  IconButton(
+                    tooltip: record.purchaseStatus == 'purchased'
+                        ? 'Ya comprado'
+                        : 'Marcar comprado',
+                    onPressed: record.purchaseStatus == 'purchased'
+                        ? null
+                        : () => widget.onMarkPurchased(record),
+                    icon: Icon(
+                      record.purchaseStatus == 'purchased'
+                          ? Icons.check_circle
+                          : Icons.shopping_cart_checkout,
+                      color: _CyberColors.primary,
                     ),
                   ),
                   IconButton(
@@ -5756,6 +5917,7 @@ class AliExpressViabilityRecord {
     required this.calculations,
     required this.createdAt,
     required this.updatedAt,
+    this.purchaseStatus = 'pending',
   });
 
   final int id;
@@ -5764,6 +5926,7 @@ class AliExpressViabilityRecord {
   final AliExpressViabilityCalculations calculations;
   final String createdAt;
   final String updatedAt;
+  final String purchaseStatus;
 
   AliExpressViabilityDraft toDraft() => draft;
 
@@ -5791,6 +5954,7 @@ class AliExpressViabilityRecord {
       calculations: AliExpressViabilityCalculations.fromDraft(draft),
       createdAt: json['createdAt'] as String? ?? '',
       updatedAt: json['updatedAt'] as String? ?? '',
+      purchaseStatus: json['purchaseStatus'] as String? ?? 'pending',
     );
   }
 }
@@ -5803,6 +5967,8 @@ class InventoryItemDraft {
     required this.publicSaleValue,
     required this.loadedAt,
     required this.warehouse,
+    this.status = 'available',
+    this.sourceViabilityId,
   });
 
   final String productName;
@@ -5811,6 +5977,8 @@ class InventoryItemDraft {
   final double publicSaleValue;
   final String loadedAt;
   final String warehouse;
+  final String status;
+  final int? sourceViabilityId;
 
   Map<String, dynamic> toJson() {
     return {
@@ -5820,6 +5988,8 @@ class InventoryItemDraft {
       'publicSaleValue': publicSaleValue,
       'loadedAt': loadedAt,
       'warehouse': warehouse,
+      'status': status,
+      'sourceViabilityId': sourceViabilityId,
     };
   }
 
@@ -5832,6 +6002,8 @@ class InventoryItemDraft {
       publicSaleValue: number('publicSaleValue'),
       loadedAt: json['loadedAt'] as String? ?? '',
       warehouse: json['warehouse'] as String? ?? '',
+      status: json['status'] as String? ?? 'available',
+      sourceViabilityId: (json['sourceViabilityId'] as num?)?.round(),
     );
   }
 }
@@ -5859,6 +6031,9 @@ class InventoryItemRecord {
   double get publicSaleValue => draft.publicSaleValue;
   String get loadedAt => draft.loadedAt;
   String get warehouse => draft.warehouse;
+  String get status => draft.status;
+  int? get sourceViabilityId => draft.sourceViabilityId;
+  String get statusLabel => status == 'in_transit' ? 'En transito' : 'Disponible';
 
   factory InventoryItemRecord.fromDraft(int id, InventoryItemDraft draft) {
     final now = DateTime.now().toIso8601String();
@@ -6016,8 +6191,7 @@ class ProductResult {
   }
 
   bool isValid(SearchFilters filters) {
-    return totalPrice > 0 &&
-        listingUrl.isNotEmpty &&
+    return listingUrl.isNotEmpty &&
         (rating == 0 || rating >= filters.minRating) &&
         (sales == 0 || sales >= filters.minSales) &&
         filters.stores.contains(store) &&
@@ -6025,7 +6199,7 @@ class ProductResult {
   }
 
   double score(SearchFilters filters) {
-    final priceScore = 1000000 / totalPrice;
+    final priceScore = totalPrice <= 0 ? 1 : 1000000 / totalPrice;
     final ratingScore = rating == 0 ? 20 : rating * 12;
     final salesScore = sales == 0 ? 8 : sales.clamp(0, 2000) / 80;
     final shippingScore = filters.shippingFilter.score(shippingIncluded);
@@ -6045,6 +6219,11 @@ class ProductResult {
   String get deliveryLabel {
     if (deliveryDays == 0) return 'entrega no visible';
     return '$deliveryDays dias';
+  }
+
+  String get priceLabel {
+    if (totalPrice <= 0) return 'precio no visible';
+    return formatCop(totalPrice);
   }
 }
 

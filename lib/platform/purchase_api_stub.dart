@@ -179,6 +179,21 @@ Future<AliExpressViabilityRecord> saveAliExpressViability(
 
 Future<void> deleteAliExpressViability(int id) async {}
 
+Future<InventoryItemRecord> markViabilityPurchased(int id) async {
+  return InventoryItemRecord.fromDraft(
+    DateTime.now().millisecondsSinceEpoch,
+    const InventoryItemDraft(
+      productName: 'Producto comprado',
+      unitPurchaseValue: 0,
+      quantity: 1,
+      publicSaleValue: 0,
+      loadedAt: '',
+      warehouse: 'En transito',
+      status: 'in_transit',
+    ),
+  );
+}
+
 Future<List<InventoryItemRecord>> loadInventoryItems() async => const [];
 
 Future<InventoryItemRecord> saveInventoryItem(InventoryItemDraft draft) async {
@@ -189,6 +204,22 @@ Future<InventoryItemRecord> saveInventoryItem(InventoryItemDraft draft) async {
 }
 
 Future<void> deleteInventoryItem(int id) async {}
+
+Future<InventoryItemRecord> receiveInventoryItem(int id, String warehouse) async {
+  return InventoryItemRecord.fromDraft(
+    id,
+    InventoryItemDraft(
+      productName: 'Producto recibido',
+      unitPurchaseValue: 0,
+      quantity: 1,
+      publicSaleValue: 0,
+      loadedAt: '',
+      warehouse: warehouse,
+    ),
+  );
+}
+
+Future<List<String>> loadWarehouses() async => const ['Bogota', 'Medellin'];
 
 Future<List<SaleRecord>> loadSales() async => const [];
 
