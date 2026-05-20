@@ -46,6 +46,27 @@ Future<AuthSession> loginAuthUser({
   );
 }
 
+Future<AuthSession> updateAuthProfile({
+  required String profileName,
+  required String password,
+  required String avatarData,
+}) async {
+  return AuthSession(
+    token: 'stub',
+    expiresAt: DateTime.now().add(const Duration(hours: 12)).toIso8601String(),
+    user: AuthUser(
+      id: 1,
+      username: profileName,
+      email: 'local@pricesec.dev',
+      role: 'super_admin',
+      profileName: profileName,
+      avatarData: avatarData,
+    ),
+  );
+}
+
+Future<String?> pickProfileImageDataUrl() async => null;
+
 Future<void> requestPasswordResetCode({required String email}) async {}
 
 Future<void> confirmPasswordResetCode({
@@ -205,7 +226,10 @@ Future<InventoryItemRecord> saveInventoryItem(InventoryItemDraft draft) async {
 
 Future<void> deleteInventoryItem(int id) async {}
 
-Future<InventoryItemRecord> receiveInventoryItem(int id, String warehouse) async {
+Future<InventoryItemRecord> receiveInventoryItem(
+  int id,
+  String warehouse,
+) async {
   return InventoryItemRecord.fromDraft(
     id,
     InventoryItemDraft(

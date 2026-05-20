@@ -55,6 +55,50 @@ Future<AuthSession> loginAuthUser({
   return session;
 }
 
+Future<AuthSession> updateAuthProfile({
+  required String profileName,
+  required String password,
+  required String avatarData,
+}) async {
+  final request = await _request(
+    '$_baseUrl/auth/profile',
+    method: 'PUT',
+    requestHeaders: {'Content-Type': 'application/json'},
+    sendData: jsonEncode({
+      'profileName': profileName,
+      'password': password,
+      'avatarData': avatarData,
+    }),
+  );
+  final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
+  if (request.status != 200) {
+    throw Exception(body['message'] as String? ?? 'No pude actualizar perfil.');
+  }
+  final session = AuthSession.fromJson(body);
+  _saveAuthSession(session);
+  return session;
+}
+
+Future<String?> pickProfileImageDataUrl() async {
+  final completer = Completer<String?>();
+  final input = html.FileUploadInputElement()..accept = 'image/*';
+  input.onChange.first.then((_) {
+    final file = input.files?.isNotEmpty == true ? input.files!.first : null;
+    if (file == null) {
+      completer.complete(null);
+      return;
+    }
+    final reader = html.FileReader();
+    reader.onLoadEnd.first.then((_) {
+      completer.complete(reader.result?.toString());
+    });
+    reader.onError.first.then((_) => completer.complete(null));
+    reader.readAsDataUrl(file);
+  });
+  input.click();
+  return completer.future;
+}
+
 Future<void> requestPasswordResetCode({required String email}) async {
   final request = await _request(
     '$_baseUrl/auth/reset/request',
@@ -418,7 +462,10 @@ Future<InventoryItemRecord> saveInventoryItem(InventoryItemDraft draft) async {
   return InventoryItemRecord.fromJson(body['item'] as Map<String, dynamic>);
 }
 
-Future<InventoryItemRecord> receiveInventoryItem(int id, String warehouse) async {
+Future<InventoryItemRecord> receiveInventoryItem(
+  int id,
+  String warehouse,
+) async {
   final request = await _request(
     '$_baseUrl/inventory/$id/receive',
     method: 'POST',
@@ -427,7 +474,9 @@ Future<InventoryItemRecord> receiveInventoryItem(int id, String warehouse) async
   );
   final body = jsonDecode(request.responseText ?? '{}') as Map<String, dynamic>;
   if (request.status != 200) {
-    throw Exception(body['message'] as String? ?? 'No pude recibir inventario.');
+    throw Exception(
+      body['message'] as String? ?? 'No pude recibir inventario.',
+    );
   }
   return InventoryItemRecord.fromJson(body['item'] as Map<String, dynamic>);
 }

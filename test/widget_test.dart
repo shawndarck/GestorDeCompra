@@ -162,6 +162,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 250));
     await tester.tap(find.text('Registrar compra'));
     await tester.pump(const Duration(milliseconds: 250));
+    await tester.ensureVisible(find.text('Guardar'));
     await tester.tap(find.text('Guardar'));
     await tester.pump(const Duration(milliseconds: 250));
 
@@ -191,7 +192,7 @@ void main() {
     await tester.tap(find.text('Comparador'));
     await tester.pump(const Duration(milliseconds: 250));
 
-    expect(find.text('Registrar inventario'), findsOneWidget);
+    expect(find.text('Sistema de Gestion'), findsOneWidget);
     expect(find.text('Registrar ventas'), findsOneWidget);
   });
 

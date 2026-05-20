@@ -1,4 +1,7 @@
+import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:typed_data';
+import 'dart:ui' show lerpDouble;
 
 import 'package:flutter/material.dart';
 
@@ -136,6 +139,7 @@ class AuthUser {
     this.status = 'active',
     this.profileName = '',
     this.phone = '',
+    this.avatarData = '',
     this.permissions = const [],
     this.stores = const [],
   });
@@ -149,6 +153,7 @@ class AuthUser {
   final String status;
   final String profileName;
   final String phone;
+  final String avatarData;
   final List<String> permissions;
   final List<MercadoLibreStore> stores;
 
@@ -170,6 +175,7 @@ class AuthUser {
       'status': status,
       'profileName': profileName,
       'phone': phone,
+      'avatarData': avatarData,
       'permissions': permissions,
       'stores': stores.map((store) => store.toJson()).toList(),
     };
@@ -186,6 +192,7 @@ class AuthUser {
       status: json['status'] as String? ?? 'active',
       profileName: json['profileName'] as String? ?? '',
       phone: json['phone'] as String? ?? '',
+      avatarData: json['avatarData'] as String? ?? '',
       permissions: (json['permissions'] as List<dynamic>? ?? const [])
           .map((value) => value.toString())
           .toList(),
@@ -412,6 +419,7 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
                         onLogout: _logout,
                         visualSkin: _visualSkin,
                         onToggleSkin: _toggleVisualSkin,
+                        onProfileUpdated: _handleProfileUpdated,
                       ),
                       const SizedBox(height: 28),
                       _ModuleSelector(
@@ -588,6 +596,10 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
     await _loadSales();
     await _loadAccessManagement();
     await _loadCurrentTrmSuggestion();
+  }
+
+  void _handleProfileUpdated(AuthSession session) {
+    setState(() => _authSession = session);
   }
 
   void _logout() {
@@ -836,7 +848,9 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
 
   Future<bool> _saveAliExpressViability(AliExpressViabilityDraft draft) async {
     try {
-      final viability = AliExpressViabilityCalculations.fromDraft(draft).viability;
+      final viability = AliExpressViabilityCalculations.fromDraft(
+        draft,
+      ).viability;
       if (viability < 2) {
         throw Exception(
           'No se puede guardar: el puntaje de viabilidad es menor a 2 y no es un producto viable para compra.',
@@ -878,6 +892,8 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
 
   Future<bool> _createPrincipalUser(PrincipalUserDraft draft) async {
     try {
+      final passwordError = _passwordValidationError(draft.password);
+      if (passwordError != null) throw Exception(passwordError);
       await createPrincipalUser(
         username: draft.username,
         email: draft.email,
@@ -920,6 +936,8 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
 
   Future<bool> _createCollaborator(CollaboratorDraft draft) async {
     try {
+      final passwordError = _passwordValidationError(draft.password);
+      if (passwordError != null) throw Exception(passwordError);
       await createCollaborator(
         username: draft.username,
         email: draft.email,
@@ -1125,6 +1143,7 @@ class _HeaderBar extends StatelessWidget {
     required this.onLogout,
     required this.visualSkin,
     required this.onToggleSkin,
+    required this.onProfileUpdated,
   });
 
   final VoidCallback onRun;
@@ -1133,6 +1152,7 @@ class _HeaderBar extends StatelessWidget {
   final VoidCallback onLogout;
   final _VisualSkin visualSkin;
   final VoidCallback onToggleSkin;
+  final ValueChanged<AuthSession> onProfileUpdated;
 
   @override
   Widget build(BuildContext context) {
@@ -1176,11 +1196,9 @@ class _HeaderBar extends StatelessWidget {
                 icon: Icons.payments,
                 label: fixedMonitorConfig.currency,
               ),
-              _HeaderPill(
-                icon: Icons.admin_panel_settings,
-                label: session.user.role == 'super_admin'
-                    ? 'Super admin'
-                    : session.user.username,
+              _ProfileHeaderButton(
+                user: session.user,
+                onUpdated: onProfileUpdated,
               ),
               OutlinedButton.icon(
                 style: OutlinedButton.styleFrom(
@@ -1314,6 +1332,272 @@ class _HeaderPill extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _ProfileHeaderButton extends StatelessWidget {
+  const _ProfileHeaderButton({required this.user, required this.onUpdated});
+
+  final AuthUser user;
+  final ValueChanged<AuthSession> onUpdated;
+
+  @override
+  Widget build(BuildContext context) {
+    final displayName = user.profileName.trim().isNotEmpty
+        ? user.profileName.trim()
+        : user.username;
+    return InkWell(
+      borderRadius: BorderRadius.circular(_isNeoSkin ? 16 : 8),
+      onTap: () => _showProfileDialog(context),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        decoration: _isNeoSkin ? _appleCardDecoration() : _fieldDecoration(),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _ProfileAvatar(user: user, radius: 18),
+            const SizedBox(width: 9),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  displayName,
+                  style: TextStyle(
+                    color: _isNeoSkin
+                        ? _NeoColors.textPrimary
+                        : _CyberColors.textPrimary,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                Text(
+                  user.role == 'super_admin' ? 'Super admin' : user.username,
+                  style: TextStyle(
+                    color: _isNeoSkin
+                        ? _NeoColors.primary
+                        : _CyberColors.primary,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showProfileDialog(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => _ProfileDialog(user: user, onUpdated: onUpdated),
+    );
+  }
+}
+
+class _ProfileAvatar extends StatelessWidget {
+  const _ProfileAvatar({required this.user, this.radius = 22});
+
+  final AuthUser user;
+  final double radius;
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = _avatarBytes(user.avatarData);
+    final initials =
+        (user.profileName.trim().isNotEmpty
+                ? user.profileName.trim()
+                : user.username)
+            .characters
+            .take(2)
+            .toString()
+            .toUpperCase();
+    return CircleAvatar(
+      radius: radius,
+      backgroundColor: (_isNeoSkin ? _NeoColors.primary : _CyberColors.primary)
+          .withValues(alpha: 0.16),
+      backgroundImage: bytes == null ? null : MemoryImage(bytes),
+      child: bytes != null
+          ? null
+          : Text(
+              initials.isEmpty ? 'U' : initials,
+              style: TextStyle(
+                color: _isNeoSkin ? _NeoColors.primary : _CyberColors.primary,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+    );
+  }
+}
+
+class _ProfileDialog extends StatefulWidget {
+  const _ProfileDialog({required this.user, required this.onUpdated});
+
+  final AuthUser user;
+  final ValueChanged<AuthSession> onUpdated;
+
+  @override
+  State<_ProfileDialog> createState() => _ProfileDialogState();
+}
+
+class _ProfileDialogState extends State<_ProfileDialog> {
+  late final TextEditingController _nameController;
+  late final TextEditingController _passwordController;
+  late String _avatarData;
+  bool _saving = false;
+  String? _message;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController(
+      text: widget.user.profileName.trim().isEmpty
+          ? widget.user.username
+          : widget.user.profileName,
+    );
+    _passwordController = TextEditingController();
+    _avatarData = widget.user.avatarData;
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dialogUser = AuthUser(
+      id: widget.user.id,
+      username: widget.user.username,
+      email: widget.user.email,
+      role: widget.user.role,
+      profileName: _nameController.text.trim(),
+      avatarData: _avatarData,
+    );
+    return AlertDialog(
+      backgroundColor: _isNeoSkin ? const Color(0xfff7f9fc) : _CyberColors.card,
+      title: Text(
+        'Actualizar perfil',
+        style: TextStyle(
+          color: _isNeoSkin ? _NeoColors.textPrimary : _CyberColors.textPrimary,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+      content: SizedBox(
+        width: 430,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _ProfileAvatar(user: dialogUser, radius: 42),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _saving ? null : _pickAvatar,
+              icon: const Icon(Icons.photo_camera),
+              label: const Text('Cargar foto'),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _nameController,
+              decoration: _inputDecoration(
+                label: 'Nombre visible',
+                hint: 'Nombre de perfil',
+                icon: Icons.badge,
+              ),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _passwordController,
+              obscureText: true,
+              decoration: _inputDecoration(
+                label: 'Nueva contrasena',
+                hint: 'Opcional: letras, numeros y caracter especial',
+                icon: Icons.lock_reset,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'La contrasena debe tener minimo 8 caracteres e incluir letras, numeros y un caracter especial.',
+              style: TextStyle(
+                color: _isNeoSkin
+                    ? _NeoColors.textSecondary
+                    : _CyberColors.textSecondary,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            if (_message != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                _message!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: _CyberColors.accent,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton.icon(
+          onPressed: _saving ? null : _save,
+          icon: Icon(_saving ? Icons.hourglass_top : Icons.save),
+          label: Text(_saving ? 'Guardando' : 'Guardar'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _pickAvatar() async {
+    final data = await pickProfileImageDataUrl();
+    if (!mounted || data == null || data.isEmpty) return;
+    setState(() => _avatarData = data);
+  }
+
+  Future<void> _save() async {
+    final name = _nameController.text.trim();
+    final password = _passwordController.text;
+    final passwordError = _passwordValidationError(password, allowEmpty: true);
+    if (name.length < 2 || passwordError != null) {
+      setState(() {
+        _message = name.length < 2
+            ? 'Escribe un nombre de perfil valido.'
+            : passwordError;
+      });
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _message = null;
+    });
+    try {
+      final session = await updateAuthProfile(
+        profileName: name,
+        password: password,
+        avatarData: _avatarData,
+      );
+      if (!mounted) return;
+      widget.onUpdated(session);
+      Navigator.pop(context);
+    } catch (error) {
+      if (!mounted) return;
+      setState(
+        () => _message = error.toString().replaceFirst(
+          RegExp(r'^Exception:\s*'),
+          '',
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 }
 
@@ -1578,6 +1862,10 @@ class _AuthGateState extends State<_AuthGate> {
           );
           widget.onAuthenticated(session);
         case _AuthMode.signup:
+          final passwordError = _passwordValidationError(
+            _passwordController.text,
+          );
+          if (passwordError != null) throw Exception(passwordError);
           final session = await registerAuthUser(
             username: _usernameController.text.trim(),
             email: _emailController.text.trim(),
@@ -1592,6 +1880,10 @@ class _AuthGateState extends State<_AuthGate> {
                 'Codigo enviado al correo registrado. En local tambien queda en auth_email_outbox.';
           });
         case _AuthMode.resetConfirm:
+          final passwordError = _passwordValidationError(
+            _passwordController.text,
+          );
+          if (passwordError != null) throw Exception(passwordError);
           await confirmPasswordResetCode(
             email: _emailController.text.trim(),
             code: _codeController.text.trim(),
@@ -1739,18 +2031,35 @@ class _ModuleOption {
   final String label;
 }
 
+class _ModuleCategory {
+  const _ModuleCategory(this.title, this.icon, this.indices);
+
+  final String title;
+  final IconData icon;
+  final List<int> indices;
+}
+
 const _moduleOptions = [
   _ModuleOption(0, Icons.compare_arrows, 'Comparador'),
   _ModuleOption(1, Icons.inventory_2, 'Registrar compra'),
   _ModuleOption(2, Icons.list_alt, 'Compras guardadas'),
   _ModuleOption(3, Icons.fact_check, 'Viabilidad AliExpress'),
   _ModuleOption(4, Icons.table_rows, 'Viabilidades guardadas'),
-  _ModuleOption(5, Icons.warehouse, 'Registrar inventario'),
+  _ModuleOption(5, Icons.dashboard_customize, 'Sistema de Gestion'),
   _ModuleOption(6, Icons.point_of_sale, 'Registrar ventas'),
   _ModuleOption(10, Icons.inventory, 'Inventario general'),
   _ModuleOption(7, Icons.admin_panel_settings, 'Usuarios principales'),
   _ModuleOption(8, Icons.group_add, 'Colaboradores'),
   _ModuleOption(9, Icons.storefront, 'Tiendas Mercado Libre'),
+];
+
+const _moduleCategories = [
+  _ModuleCategory('Inicio', Icons.home, [0]),
+  _ModuleCategory('Inventario', Icons.inventory_2, [10, 5]),
+  _ModuleCategory('Ventas', Icons.shopping_cart, [6]),
+  _ModuleCategory('Compras', Icons.business_center, [1, 2, 3, 4]),
+  _ModuleCategory('Integraciones', Icons.link, [9]),
+  _ModuleCategory('Configuracion', Icons.settings, [7, 8]),
 ];
 
 class _ModuleSelector extends StatefulWidget {
@@ -1789,80 +2098,329 @@ class _ModuleSelectorState extends State<_ModuleSelector> {
       for (final option in widget.options)
         if (_smartMatches(query, [option.label])) option,
     ];
+    final textPrimary = _isNeoSkin
+        ? _NeoColors.textPrimary
+        : _CyberColors.textPrimary;
+    final textSecondary = _isNeoSkin
+        ? _NeoColors.textSecondary
+        : _CyberColors.textSecondary;
+    final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.primary;
 
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(18),
       decoration: _isNeoSkin
-          ? _cyberPanelDecoration(radius: 16)
-          : BoxDecoration(
-              color: _CyberColors.card.withValues(alpha: 0.75),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: _CyberColors.border),
-            ),
+          ? _applePanelDecoration()
+          : _cyberPanelDecoration(radius: 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          InkWell(
-            borderRadius: BorderRadius.circular(8),
-            onTap: () => setState(() => _open = !_open),
-            child: Row(
-              children: [
-                Icon(active.icon, color: _CyberColors.primary),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    active.label,
-                    style: TextStyle(
-                      color: _isNeoSkin
-                          ? _NeoColors.textPrimary
-                          : _CyberColors.textPrimary,
-                      fontWeight: FontWeight.w900,
-                    ),
+          Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.13),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(Icons.store_mall_directory, color: accent),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: () => setState(() => _open = !_open),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Gestion de inventario',
+                        style: TextStyle(
+                          color: textPrimary,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 16,
+                        ),
+                      ),
+                      Text(
+                        'Activo: ${active.label}',
+                        style: TextStyle(
+                          color: accent,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                Icon(
-                  _open ? Icons.expand_less : Icons.expand_more,
-                  color: _isNeoSkin
-                      ? _NeoColors.textPrimary
-                      : _CyberColors.textPrimary,
+              ),
+              SizedBox(
+                width: math.min(390, MediaQuery.sizeOf(context).width * 0.5),
+                child: TextField(
+                  controller: _searchController,
+                  onChanged: (_) => setState(() => _open = true),
+                  style: TextStyle(
+                    color: textPrimary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  decoration: _inputDecoration(
+                    label: 'Buscar modulo',
+                    hint: 'Compras, ventas, inventario...',
+                    icon: Icons.search,
+                  ),
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 10),
+              IconButton(
+                tooltip: _open ? 'Cerrar menu' : 'Abrir menu',
+                onPressed: () => setState(() => _open = !_open),
+                icon: Icon(_open ? Icons.expand_less : Icons.expand_more),
+                color: textPrimary,
+              ),
+            ],
           ),
-          if (_open) ...[
-            const SizedBox(height: 12),
-            TextField(
-              controller: _searchController,
-              onChanged: (_) => setState(() {}),
-              style: TextStyle(
-                color: _isNeoSkin
-                    ? _NeoColors.textPrimary
-                    : _CyberColors.textPrimary,
-              ),
-              decoration: _inputDecoration(
-                label: 'Buscar modulo',
-                hint: 'Ej: compra, venta, inventario...',
-                icon: Icons.search,
-              ),
-            ),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final option in filtered)
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              for (final category in _moduleCategories)
+                for (final option in _optionsForCategory(
+                  category,
+                  widget.options,
+                ))
                   _ModuleOptionButton(
                     icon: option.icon,
                     label: option.label,
                     selected: widget.activeIndex == option.index,
-                    onTap: () {
-                      widget.onChanged(option.index);
-                      setState(() => _open = false);
-                    },
+                    onTap: () => widget.onChanged(option.index),
+                  ),
+            ],
+          ),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 180),
+            child: !_open
+                ? const SizedBox.shrink()
+                : Padding(
+                    padding: const EdgeInsets.only(top: 18),
+                    child: query.trim().isNotEmpty
+                        ? Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            children: [
+                              for (final option in filtered)
+                                _ModuleOptionButton(
+                                  icon: option.icon,
+                                  label: option.label,
+                                  selected: widget.activeIndex == option.index,
+                                  onTap: () {
+                                    widget.onChanged(option.index);
+                                    setState(() => _open = false);
+                                  },
+                                ),
+                            ],
+                          )
+                        : _MegaMenuGrid(
+                            options: widget.options,
+                            activeIndex: widget.activeIndex,
+                            onChanged: (index) {
+                              widget.onChanged(index);
+                              setState(() => _open = false);
+                            },
+                            textPrimary: textPrimary,
+                            textSecondary: textSecondary,
+                            accent: accent,
+                          ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<_ModuleOption> _optionsForCategory(
+    _ModuleCategory category,
+    List<_ModuleOption> options,
+  ) {
+    return [
+      for (final index in category.indices)
+        for (final option in options)
+          if (option.index == index) option,
+    ];
+  }
+}
+
+class _MegaMenuGrid extends StatelessWidget {
+  const _MegaMenuGrid({
+    required this.options,
+    required this.activeIndex,
+    required this.onChanged,
+    required this.textPrimary,
+    required this.textSecondary,
+    required this.accent,
+  });
+
+  final List<_ModuleOption> options;
+  final int activeIndex;
+  final ValueChanged<int> onChanged;
+  final Color textPrimary;
+  final Color textSecondary;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    final visibleCategories = [
+      for (final category in _moduleCategories)
+        if (_categoryOptions(category).isNotEmpty) category,
+    ];
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: _isNeoSkin ? _appleCardDecoration() : _fieldDecoration(),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final columns = constraints.maxWidth < 720 ? 2 : 3;
+          return GridView.count(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            crossAxisCount: columns,
+            mainAxisSpacing: 16,
+            crossAxisSpacing: 16,
+            childAspectRatio: constraints.maxWidth < 720 ? 1.55 : 1.9,
+            children: [
+              for (final category in visibleCategories)
+                _MegaMenuCategory(
+                  category: category,
+                  options: options,
+                  activeIndex: activeIndex,
+                  onChanged: onChanged,
+                  textPrimary: textPrimary,
+                  textSecondary: textSecondary,
+                  accent: accent,
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  List<_ModuleOption> _categoryOptions(_ModuleCategory category) {
+    return [
+      for (final index in category.indices)
+        for (final option in options)
+          if (option.index == index) option,
+    ];
+  }
+}
+
+class _MegaMenuCategory extends StatelessWidget {
+  const _MegaMenuCategory({
+    required this.category,
+    required this.options,
+    required this.activeIndex,
+    required this.onChanged,
+    required this.textPrimary,
+    required this.textSecondary,
+    required this.accent,
+  });
+
+  final _ModuleCategory category;
+  final List<_ModuleOption> options;
+  final int activeIndex;
+  final ValueChanged<int> onChanged;
+  final Color textPrimary;
+  final Color textSecondary;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    final categoryOptions = [
+      for (final index in category.indices)
+        for (final option in options)
+          if (option.index == index) option,
+    ];
+    if (categoryOptions.isEmpty) return const SizedBox.shrink();
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _isNeoSkin
+            ? Colors.white.withValues(alpha: 0.34)
+            : _CyberColors.bgDarker.withValues(alpha: 0.38),
+        borderRadius: BorderRadius.circular(_isNeoSkin ? 18 : 10),
+        border: Border.all(
+          color: _isNeoSkin
+              ? _NeoColors.lightEdge
+              : _CyberColors.border.withValues(alpha: 0.8),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(category.icon, color: accent, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                category.title.toUpperCase(),
+                style: TextStyle(
+                  color: accent,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Expanded(
+            child: ListView(
+              physics: const NeverScrollableScrollPhysics(),
+              children: [
+                for (final option in categoryOptions)
+                  InkWell(
+                    borderRadius: BorderRadius.circular(10),
+                    onTap: () => onChanged(option.index),
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 7),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: activeIndex == option.index
+                            ? accent.withValues(alpha: 0.14)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            option.icon,
+                            size: 18,
+                            color: activeIndex == option.index
+                                ? accent
+                                : textPrimary,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              option.label,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: activeIndex == option.index
+                                    ? accent
+                                    : textPrimary,
+                                fontWeight: activeIndex == option.index
+                                    ? FontWeight.w900
+                                    : FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
               ],
             ),
-          ],
+          ),
         ],
       ),
     );
@@ -1884,27 +2442,49 @@ class _ModuleOptionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return FilledButton.icon(
-      style: FilledButton.styleFrom(
-        backgroundColor: selected
-            ? (_isNeoSkin ? _NeoColors.primary : _CyberColors.primary)
-            : Colors.transparent,
-        foregroundColor: selected
-            ? (_isNeoSkin ? Colors.white : _CyberColors.bgDarker)
-            : (_isNeoSkin ? _NeoColors.textPrimary : _CyberColors.textPrimary),
-        side: BorderSide(
-          color: selected
-              ? (_isNeoSkin ? _NeoColors.primary : _CyberColors.primary)
-              : (_isNeoSkin ? Colors.transparent : _CyberColors.border),
+    final bg = selected
+        ? (_isNeoSkin ? _NeoColors.primary : _CyberColors.primary)
+        : (_isNeoSkin ? const Color(0xffedf1f7) : Colors.transparent);
+    final fg = selected
+        ? (_isNeoSkin ? Colors.white : _CyberColors.bgDarker)
+        : (_isNeoSkin ? _NeoColors.textPrimary : _CyberColors.textPrimary);
+    return DecoratedBox(
+      decoration: _isNeoSkin && !selected
+          ? const BoxDecoration(
+              borderRadius: BorderRadius.all(Radius.circular(12)),
+              boxShadow: [
+                BoxShadow(
+                  color: _NeoColors.shadowDark,
+                  blurRadius: 10,
+                  offset: Offset(4, 4),
+                ),
+                BoxShadow(
+                  color: _NeoColors.shadowLight,
+                  blurRadius: 10,
+                  offset: Offset(-4, -4),
+                ),
+              ],
+            )
+          : const BoxDecoration(),
+      child: FilledButton.icon(
+        style: FilledButton.styleFrom(
+          backgroundColor: bg,
+          foregroundColor: fg,
+          side: BorderSide(
+            color: selected
+                ? (_isNeoSkin ? _NeoColors.primary : _CyberColors.primary)
+                : (_isNeoSkin ? _NeoColors.lightEdge : _CyberColors.border),
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(_isNeoSkin ? 12 : 8),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+          textStyle: const TextStyle(fontWeight: FontWeight.w800),
         ),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(_isNeoSkin ? 12 : 8),
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        onPressed: onTap,
+        icon: Icon(icon, size: 18),
+        label: Text(label),
       ),
-      onPressed: onTap,
-      icon: Icon(icon, size: 18),
-      label: Text(label),
     );
   }
 }
@@ -2327,6 +2907,25 @@ class _PermissionWrap extends StatelessWidget {
           FilterChip(
             selected: selected.contains(permission.key),
             label: Text(permission.label),
+            showCheckmark: true,
+            selectedColor:
+                (_isNeoSkin ? _NeoColors.primary : _CyberColors.primary)
+                    .withValues(alpha: _isNeoSkin ? 0.18 : 1),
+            backgroundColor: _isNeoSkin
+                ? const Color(0xffedf1f7)
+                : _CyberColors.bgDarker,
+            side: BorderSide(
+              color: selected.contains(permission.key)
+                  ? (_isNeoSkin ? _NeoColors.primary : _CyberColors.primary)
+                  : (_isNeoSkin ? _NeoColors.shadowDark : _CyberColors.border),
+              width: _isNeoSkin ? 1.4 : 1,
+            ),
+            labelStyle: TextStyle(
+              color: _isNeoSkin
+                  ? _NeoColors.textPrimary
+                  : _CyberColors.textPrimary,
+              fontWeight: FontWeight.w800,
+            ),
             onSelected: (value) => onChanged(permission.key, value),
           ),
       ],
@@ -2880,25 +3479,32 @@ class _StoreChoiceChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.primary;
+    final background = _isNeoSkin
+        ? const Color(0xffedf1f7)
+        : _CyberColors.bgDarker.withValues(alpha: 0.5);
+    final textColor = selected && !_isNeoSkin
+        ? _CyberColors.bgDarker
+        : (_isNeoSkin ? _NeoColors.textPrimary : _CyberColors.textPrimary);
     return FilterChip(
       selected: selected,
       showCheckmark: false,
       avatar: Icon(
         store.icon,
         size: 18,
-        color: selected ? _CyberColors.bgDarker : _CyberColors.secondary,
+        color: selected && !_isNeoSkin ? _CyberColors.bgDarker : accent,
       ),
       label: Text(store.label),
       onSelected: (_) => onTap(),
-      selectedColor: _CyberColors.primary,
-      backgroundColor: _CyberColors.bgDarker.withValues(alpha: 0.5),
+      selectedColor: accent.withValues(alpha: _isNeoSkin ? 0.18 : 1),
+      backgroundColor: background,
       side: BorderSide(
-        color: selected ? _CyberColors.primary : _CyberColors.border,
+        color: selected
+            ? accent
+            : (_isNeoSkin ? _NeoColors.shadowDark : _CyberColors.border),
+        width: _isNeoSkin ? 1.4 : 1,
       ),
-      labelStyle: TextStyle(
-        color: selected ? _CyberColors.bgDarker : _CyberColors.textPrimary,
-        fontWeight: FontWeight.w900,
-      ),
+      labelStyle: TextStyle(color: textColor, fontWeight: FontWeight.w900),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
     );
   }
@@ -2975,20 +3581,22 @@ class _SectionTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final titleColor = _isNeoSkin
+        ? _NeoColors.textPrimary
+        : _CyberColors.textPrimary;
+    final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.primary;
+    final secondary = _isNeoSkin ? _NeoColors.success : _CyberColors.secondary;
     return Row(
       children: [
         Text(
           number,
-          style: const TextStyle(
-            color: _CyberColors.primary,
-            fontWeight: FontWeight.w900,
-          ),
+          style: TextStyle(color: accent, fontWeight: FontWeight.w900),
         ),
         const SizedBox(width: 14),
         Text(
           title,
-          style: const TextStyle(
-            color: _CyberColors.textPrimary,
+          style: TextStyle(
+            color: titleColor,
             fontSize: 20,
             fontWeight: FontWeight.w900,
           ),
@@ -2997,10 +3605,8 @@ class _SectionTitle extends StatelessWidget {
         Expanded(
           child: Container(
             height: 2,
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                colors: [_CyberColors.primary, _CyberColors.secondary],
-              ),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(colors: [accent, secondary]),
             ),
           ),
         ),
@@ -4050,9 +4656,10 @@ class _InventorySectionState extends State<_InventorySection> {
     final productNames = _uniqueInventoryValues(
       widget.items.map((item) => item.productName),
     );
-    final warehouses = _uniqueInventoryValues(
-      [...widget.warehouses, ...widget.items.map((item) => item.warehouse)],
-    );
+    final warehouses = _uniqueInventoryValues([
+      ...widget.warehouses,
+      ...widget.items.map((item) => item.warehouse),
+    ]);
     final filtered = widget.items.where((item) {
       return _smartMatches(_searchController.text, [
         item.productName,
@@ -4066,7 +4673,7 @@ class _InventorySectionState extends State<_InventorySection> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const _SectionTitle(number: '07', title: 'Registrar inventario'),
+          const _SectionTitle(number: '07', title: 'Sistema de Gestion'),
           const SizedBox(height: 18),
           if (lowStock.isNotEmpty) ...[
             _StockAlert(items: lowStock),
@@ -4126,29 +4733,28 @@ class _InventorySectionState extends State<_InventorySection> {
               'Aun no hay inventario registrado.',
               style: TextStyle(color: _CyberColors.textSecondary),
             )
-          else
-            ...[
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: Text(
-                  'Historial de movimientos',
-                  style: TextStyle(
-                    color: _isNeoSkin
-                        ? _NeoColors.textPrimary
-                        : _CyberColors.textPrimary,
-                    fontWeight: FontWeight.w900,
-                  ),
+          else ...[
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Text(
+                'Historial de movimientos',
+                style: TextStyle(
+                  color: _isNeoSkin
+                      ? _NeoColors.textPrimary
+                      : _CyberColors.textPrimary,
+                  fontWeight: FontWeight.w900,
                 ),
               ),
-            ],
-            ...filtered.map(
-              (item) => _InventoryRow(
-                item: item,
-                warehouses: warehouses,
-                onDelete: widget.onDelete,
-                onReceive: widget.onReceive,
-              ),
             ),
+          ],
+          ...filtered.map(
+            (item) => _InventoryRow(
+              item: item,
+              warehouses: warehouses,
+              onDelete: widget.onDelete,
+              onReceive: widget.onReceive,
+            ),
+          ),
         ],
       ),
     );
@@ -4191,32 +4797,44 @@ class _InventorySectionState extends State<_InventorySection> {
     List<String> options,
     IconData icon,
   ) {
+    if (key == 'warehouse') {
+      return _WarehouseAutocompleteField(
+        controller: _controllers[key]!,
+        label: label,
+        options: options,
+        errorText: _errors[key],
+      );
+    }
     return Autocomplete<String>(
       initialValue: TextEditingValue(text: _controllers[key]!.text),
       optionsBuilder: (value) {
         final query = value.text.trim();
         if (query.isEmpty) return options.take(8);
-        return options.where((option) => _smartMatches(query, [option])).take(8);
+        return options
+            .where((option) => _smartMatches(query, [option]))
+            .take(8);
       },
       onSelected: (value) => _controllers[key]!.text = value,
       fieldViewBuilder:
           (context, textEditingController, focusNode, onFieldSubmitted) {
-        if (textEditingController.text != _controllers[key]!.text) {
-          textEditingController.text = _controllers[key]!.text;
-        }
-        return TextField(
-          controller: textEditingController,
-          focusNode: focusNode,
-          onChanged: (value) => _controllers[key]!.text = value,
-          style: const TextStyle(color: _CyberColors.textPrimary),
-          decoration: _inputDecoration(
-            label: label,
-            hint: options.isEmpty ? 'Escribe uno nuevo' : 'Busca o escribe uno nuevo',
-            icon: icon,
-            errorText: _errors[key],
-          ),
-        );
-      },
+            if (textEditingController.text != _controllers[key]!.text) {
+              textEditingController.text = _controllers[key]!.text;
+            }
+            return TextField(
+              controller: textEditingController,
+              focusNode: focusNode,
+              onChanged: (value) => _controllers[key]!.text = value,
+              style: const TextStyle(color: _CyberColors.textPrimary),
+              decoration: _inputDecoration(
+                label: label,
+                hint: options.isEmpty
+                    ? 'Escribe uno nuevo'
+                    : 'Busca o escribe uno nuevo',
+                icon: icon,
+                errorText: _errors[key],
+              ),
+            );
+          },
       optionsViewBuilder: (context, onSelected, visibleOptions) {
         return Align(
           alignment: Alignment.topLeft,
@@ -4317,6 +4935,14 @@ class _InventoryRow extends StatelessWidget {
     final addedBy = item.createdByUsername.trim().isEmpty
         ? 'Usuario no registrado'
         : item.createdByUsername.trim();
+    final textPrimary = _isNeoSkin
+        ? _NeoColors.textPrimary
+        : _CyberColors.textPrimary;
+    final textSecondary = _isNeoSkin
+        ? _NeoColors.textSecondary
+        : _CyberColors.textSecondary;
+    final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.primary;
+    final danger = _isNeoSkin ? const Color(0xffff5a5f) : _CyberColors.accent;
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(14),
@@ -4331,23 +4957,43 @@ class _InventoryRow extends StatelessWidget {
                 Text(
                   item.productName,
                   style: TextStyle(
-                    color: item.quantity < 3
-                        ? _CyberColors.accent
-                        : _CyberColors.textPrimary,
+                    color: item.quantity < 3 ? danger : textPrimary,
+                    fontSize: 15,
                     fontWeight: FontWeight.w900,
                   ),
                 ),
                 const SizedBox(height: 6),
                 Text(
                   'Estado: ${item.statusLabel} | Bodega: ${item.warehouse} | Cantidad: ${_formatInputNumber(item.quantity)} | Compra: ${formatCop(item.unitPurchaseValue.round())} | Venta: ${formatCop(item.publicSaleValue.round())}',
-                  style: const TextStyle(color: _CyberColors.textSecondary),
+                  style: TextStyle(
+                    color: textSecondary,
+                    fontWeight: FontWeight.w700,
+                    height: 1.35,
+                  ),
                 ),
                 const SizedBox(height: 4),
-                Text(
-                  'Movimiento: ${_formatDateTimeLabel(item.createdAt)} | Agregado por: $addedBy | Fecha carga: ${item.loadedAt}',
-                  style: const TextStyle(
-                    color: _CyberColors.textSecondary,
-                    fontSize: 12,
+                RichText(
+                  text: TextSpan(
+                    style: TextStyle(
+                      color: textSecondary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                      height: 1.35,
+                    ),
+                    children: [
+                      TextSpan(
+                        text:
+                            'Movimiento: ${_formatDateTimeLabel(item.createdAt)} | Agregado por: ',
+                      ),
+                      TextSpan(
+                        text: addedBy,
+                        style: TextStyle(
+                          color: accent,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      TextSpan(text: ' | Fecha carga: ${item.loadedAt}'),
+                    ],
                   ),
                 ),
               ],
@@ -4357,12 +5003,12 @@ class _InventoryRow extends StatelessWidget {
             IconButton(
               tooltip: 'Marcar recibido',
               onPressed: () => _showReceiveDialog(context),
-              icon: const Icon(Icons.move_to_inbox, color: _CyberColors.primary),
+              icon: Icon(Icons.move_to_inbox, color: accent),
             ),
           IconButton(
             tooltip: 'Eliminar',
             onPressed: () => onDelete(item.id),
-            icon: const Icon(Icons.delete, color: _CyberColors.accent),
+            icon: Icon(Icons.delete, color: danger),
           ),
         ],
       ),
@@ -4379,7 +5025,9 @@ class _InventoryRow extends StatelessWidget {
           optionsBuilder: (value) {
             final query = value.text.trim();
             if (query.isEmpty) return warehouses.take(10);
-            return warehouses.where((item) => _smartMatches(query, [item])).take(10);
+            return warehouses
+                .where((item) => _smartMatches(query, [item]))
+                .take(10);
           },
           onSelected: (value) => controller.text = value,
           fieldViewBuilder: (context, textController, focusNode, onSubmit) {
@@ -4407,6 +5055,150 @@ class _InventoryRow extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _WarehouseAutocompleteField extends StatelessWidget {
+  const _WarehouseAutocompleteField({
+    required this.controller,
+    required this.label,
+    required this.options,
+    required this.errorText,
+  });
+
+  final TextEditingController controller;
+  final String label;
+  final List<String> options;
+  final String? errorText;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.secondary;
+    final textPrimary = _isNeoSkin
+        ? _NeoColors.textPrimary
+        : _CyberColors.textPrimary;
+    final textSecondary = _isNeoSkin
+        ? _NeoColors.textSecondary
+        : _CyberColors.textSecondary;
+    return Autocomplete<String>(
+      initialValue: TextEditingValue(text: controller.text),
+      optionsBuilder: (value) {
+        final query = value.text.trim();
+        final matches = query.isEmpty
+            ? options.take(12)
+            : options
+                  .where((option) => _smartMatches(query, [option]))
+                  .take(18);
+        return matches;
+      },
+      onSelected: (value) => controller.text = value,
+      fieldViewBuilder:
+          (context, textEditingController, focusNode, onFieldSubmitted) {
+            if (textEditingController.text != controller.text) {
+              textEditingController.text = controller.text;
+            }
+            return TextField(
+              controller: textEditingController,
+              focusNode: focusNode,
+              onChanged: (value) => controller.text = value,
+              style: TextStyle(color: textPrimary, fontWeight: FontWeight.w700),
+              decoration: _inputDecoration(
+                label: label,
+                hint: 'Ciudad o bodega, ej: Florencia',
+                icon: Icons.location_on,
+                errorText: errorText,
+                suffixIcon: controller.text.isEmpty
+                    ? Icon(Icons.keyboard_arrow_down, color: textSecondary)
+                    : IconButton(
+                        tooltip: 'Limpiar bodega',
+                        onPressed: () {
+                          controller.clear();
+                          textEditingController.clear();
+                        },
+                        icon: Icon(Icons.close, color: textSecondary),
+                      ),
+              ),
+            );
+          },
+      optionsViewBuilder: (context, onSelected, visibleOptions) {
+        final list = visibleOptions.toList();
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 0,
+            color: Colors.transparent,
+            child: Container(
+              margin: const EdgeInsets.only(top: 8),
+              constraints: const BoxConstraints(maxWidth: 520, maxHeight: 330),
+              decoration: _appleFloatingDecoration(),
+              child: ListView.separated(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                shrinkWrap: true,
+                itemCount: list.length,
+                separatorBuilder: (context, index) => Divider(
+                  height: 1,
+                  indent: 54,
+                  color: textSecondary.withValues(alpha: 0.16),
+                ),
+                itemBuilder: (context, index) {
+                  final option = list[index];
+                  return InkWell(
+                    onTap: () => onSelected(option),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 11,
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(
+                              color: accent.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Icon(Icons.place, size: 18, color: accent),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  option,
+                                  style: TextStyle(
+                                    color: textPrimary,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Colombia',
+                                  style: TextStyle(
+                                    color: textSecondary,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Icon(
+                            Icons.north_west,
+                            size: 16,
+                            color: textSecondary,
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -4446,8 +5238,7 @@ class _InventorySummarySectionState extends State<_InventorySummarySection> {
         item.productName,
         item.warehousesLabel,
       ]);
-    }).toList()
-      ..sort((a, b) => a.productName.compareTo(b.productName));
+    }).toList()..sort((a, b) => a.productName.compareTo(b.productName));
     final pageCount = math.max(1, (filtered.length / _pageSize).ceil());
     if (_page >= pageCount) _page = pageCount - 1;
     final start = _page * _pageSize;
@@ -4457,14 +5248,17 @@ class _InventorySummarySectionState extends State<_InventorySummarySection> {
       (sum, item) => sum + item.totalQuantity,
     );
 
+    final textSecondary = _isNeoSkin
+        ? _NeoColors.textSecondary
+        : _CyberColors.textSecondary;
     return Container(
-      padding: const EdgeInsets.all(22),
-      decoration: _cyberPanelDecoration(),
+      padding: const EdgeInsets.all(24),
+      decoration: _applePanelDecoration(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const _SectionTitle(number: '09', title: 'Inventario general'),
-          const SizedBox(height: 12),
+          const SizedBox(height: 16),
           Wrap(
             spacing: 12,
             runSpacing: 12,
@@ -4489,7 +5283,7 @@ class _InventorySummarySectionState extends State<_InventorySummarySection> {
               ),
             ],
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 22),
           _ListSearchBox(
             controller: _searchController,
             label: 'Buscar inventario general',
@@ -4498,9 +5292,9 @@ class _InventorySummarySectionState extends State<_InventorySummarySection> {
           ),
           const SizedBox(height: 14),
           if (visible.isEmpty)
-            const Text(
+            Text(
               'No hay inventario para mostrar.',
-              style: TextStyle(color: _CyberColors.textSecondary),
+              style: TextStyle(color: textSecondary),
             )
           else
             ...visible.map((item) => _InventorySummaryRow(item: item)),
@@ -4511,8 +5305,9 @@ class _InventorySummarySectionState extends State<_InventorySummarySection> {
               totalItems: filtered.length,
               pageSize: _pageSize,
               onPrevious: _page == 0 ? null : () => setState(() => _page--),
-              onNext:
-                  _page >= pageCount - 1 ? null : () => setState(() => _page++),
+              onNext: _page >= pageCount - 1
+                  ? null
+                  : () => setState(() => _page++),
             ),
         ],
       ),
@@ -4542,10 +5337,19 @@ class _InventorySummaryRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final lowStock = item.totalQuantity < 3;
+    final accent = lowStock
+        ? (_isNeoSkin ? const Color(0xffff5a5f) : _CyberColors.accent)
+        : (_isNeoSkin ? _NeoColors.primary : _CyberColors.primary);
+    final textPrimary = _isNeoSkin
+        ? _NeoColors.textPrimary
+        : _CyberColors.textPrimary;
+    final textSecondary = _isNeoSkin
+        ? _NeoColors.textSecondary
+        : _CyberColors.textSecondary;
     return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(14),
-      decoration: _fieldDecoration(),
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(18),
+      decoration: _appleCardDecoration(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -4555,47 +5359,132 @@ class _InventorySummaryRow extends StatelessWidget {
                 child: Text(
                   item.productName,
                   style: TextStyle(
-                    color: lowStock
-                        ? _CyberColors.accent
-                        : _CyberColors.textPrimary,
+                    color: textPrimary,
+                    fontSize: 15,
                     fontWeight: FontWeight.w900,
                   ),
                 ),
               ),
-              Text(
-                '${_formatInputNumber(item.totalQuantity)} und',
-                style: TextStyle(
-                  color: lowStock
-                      ? _CyberColors.accent
-                      : _CyberColors.primary,
-                  fontWeight: FontWeight.w900,
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: _isNeoSkin ? 0.12 : 0.16),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '${_formatInputNumber(item.totalQuantity)} und',
+                  style: TextStyle(color: accent, fontWeight: FontWeight.w900),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          Text(
-            'Bodegas: ${item.warehousesLabel}',
-            style: const TextStyle(color: _CyberColors.textSecondary),
+          const SizedBox(height: 10),
+          _InventoryMetaLine(
+            icon: Icons.warehouse,
+            text: 'Bodegas: ${item.warehousesLabel}',
+            color: textSecondary,
           ),
-          const SizedBox(height: 4),
-          Text(
-            'Compra promedio: ${formatCop(item.averagePurchaseValue.round())} | Venta actual: ${formatCop(item.lastSaleValue.round())} | Movimientos: ${item.movements}',
-            style: const TextStyle(color: _CyberColors.textSecondary),
+          const SizedBox(height: 6),
+          _InventoryMetaLine(
+            icon: Icons.payments,
+            text:
+                'Compra promedio: ${formatCop(item.averagePurchaseValue.round())} | Venta actual: ${formatCop(item.lastSaleValue.round())} | Movimientos: ${item.movements}',
+            color: textSecondary,
           ),
-          const SizedBox(height: 4),
-          Text(
-            'Ultimo movimiento: ${_formatDateTimeLabel(item.lastMovementAt)} por ${item.lastCreatedBy}',
-            style: const TextStyle(
-              color: _CyberColors.textSecondary,
-              fontSize: 12,
-            ),
+          const SizedBox(height: 6),
+          _InventoryUserMetaLine(
+            icon: Icons.history,
+            prefix:
+                'Ultimo movimiento: ${_formatDateTimeLabel(item.lastMovementAt)} por ',
+            username: item.lastCreatedBy,
+            color: textSecondary,
+            accent: accent,
           ),
         ],
       ),
     );
   }
+}
 
+class _InventoryUserMetaLine extends StatelessWidget {
+  const _InventoryUserMetaLine({
+    required this.icon,
+    required this.prefix,
+    required this.username,
+    required this.color,
+    required this.accent,
+  });
+
+  final IconData icon;
+  final String prefix;
+  final String username;
+  final Color color;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 16, color: color.withValues(alpha: 0.9)),
+        const SizedBox(width: 8),
+        Expanded(
+          child: RichText(
+            text: TextSpan(
+              style: TextStyle(
+                color: color,
+                height: 1.35,
+                fontWeight: FontWeight.w800,
+              ),
+              children: [
+                TextSpan(text: prefix),
+                TextSpan(
+                  text: username.trim().isEmpty ? 'Usuario' : username,
+                  style: TextStyle(color: accent, fontWeight: FontWeight.w900),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _InventoryMetaLine extends StatelessWidget {
+  const _InventoryMetaLine({
+    required this.icon,
+    required this.text,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String text;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 16, color: color.withValues(alpha: 0.85)),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(
+              color: color,
+              height: 1.35,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class _InventoryAggregate {
@@ -4639,7 +5528,8 @@ class _InventoryAggregate {
     totalPurchaseValue += item.unitPurchaseValue * item.quantity;
     lastSaleValue = item.publicSaleValue;
     movements++;
-    warehouses[item.warehouse] = (warehouses[item.warehouse] ?? 0) + item.quantity;
+    warehouses[item.warehouse] =
+        (warehouses[item.warehouse] ?? 0) + item.quantity;
     if (item.createdAt.compareTo(lastMovementAt) >= 0) {
       lastMovementAt = item.createdAt;
       lastCreatedBy = item.createdByUsername.trim().isEmpty
@@ -4675,31 +5565,40 @@ class _MetricPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.primary;
+    final textPrimary = _isNeoSkin
+        ? _NeoColors.textPrimary
+        : _CyberColors.textPrimary;
+    final textSecondary = _isNeoSkin
+        ? _NeoColors.textSecondary
+        : _CyberColors.textSecondary;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: _fieldDecoration(),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: _appleCardDecoration(),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, color: _CyberColors.primary, size: 20),
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: accent, size: 19),
+          ),
           const SizedBox(width: 10),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 value,
-                style: const TextStyle(
-                  color: _CyberColors.textPrimary,
+                style: TextStyle(
+                  color: textPrimary,
                   fontWeight: FontWeight.w900,
                 ),
               ),
-              Text(
-                label,
-                style: const TextStyle(
-                  color: _CyberColors.textSecondary,
-                  fontSize: 12,
-                ),
-              ),
+              Text(label, style: TextStyle(color: textSecondary, fontSize: 12)),
             ],
           ),
         ],
@@ -5067,7 +5966,10 @@ class _ViabilitiesListState extends State<_ViabilitiesList> {
                     onPressed: record.draft.productLink.trim().isEmpty
                         ? null
                         : () => openExternalUrl(record.draft.productLink),
-                    icon: const Icon(Icons.open_in_new, color: _CyberColors.primary),
+                    icon: const Icon(
+                      Icons.open_in_new,
+                      color: _CyberColors.primary,
+                    ),
                   ),
                   IconButton(
                     tooltip: record.purchaseStatus == 'purchased'
@@ -5120,34 +6022,67 @@ class _PurchaseMessage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final lower = message.toLowerCase();
     final success =
-        message.toLowerCase().contains('correctamente') ||
-        message.toLowerCase().contains('eliminada');
+        lower.contains('correctamente') ||
+        lower.contains('eliminad') ||
+        lower.contains('recibido') ||
+        lower.contains('comprado');
+    final warning =
+        lower.contains('alerta') ||
+        lower.contains('viabilidad') ||
+        lower.contains('menor') ||
+        lower.contains('agot');
+    final tone = success
+        ? _AlertTone.success
+        : warning
+        ? _AlertTone.warning
+        : _AlertTone.error;
+    final color = switch (tone) {
+      _AlertTone.success =>
+        _isNeoSkin ? _NeoColors.success : _CyberColors.primary,
+      _AlertTone.warning => const Color(0xfff8bb86),
+      _AlertTone.error =>
+        _isNeoSkin ? const Color(0xffef4444) : _CyberColors.accent,
+    };
+    final textColor = _isNeoSkin
+        ? _NeoColors.textPrimary
+        : _CyberColors.textPrimary;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: (success ? _CyberColors.primary : _CyberColors.accent)
-            .withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: success ? _CyberColors.primary : _CyberColors.accent,
-        ),
+        color: _isNeoSkin
+            ? Colors.white.withValues(alpha: 0.45)
+            : _CyberColors.card,
+        borderRadius: BorderRadius.circular(_isNeoSkin ? 18 : 12),
+        border: Border.all(color: color.withValues(alpha: 0.38)),
+        boxShadow: _isNeoSkin
+            ? const [
+                BoxShadow(
+                  color: _NeoColors.shadowDark,
+                  blurRadius: 12,
+                  offset: Offset(5, 5),
+                ),
+                BoxShadow(
+                  color: _NeoColors.shadowLight,
+                  blurRadius: 12,
+                  offset: Offset(-5, -5),
+                ),
+              ]
+            : [BoxShadow(color: color.withValues(alpha: 0.12), blurRadius: 18)],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            success ? Icons.check_circle : Icons.info,
-            color: success ? _CyberColors.primary : _CyberColors.accent,
-            size: 18,
-          ),
-          const SizedBox(width: 8),
+          _ModalAlertIcon(tone: tone, color: color),
+          const SizedBox(width: 12),
           Flexible(
             child: Text(
               message,
               style: TextStyle(
-                color: success ? _CyberColors.primary : _CyberColors.accent,
+                color: textColor,
                 fontWeight: FontWeight.w800,
+                height: 1.35,
               ),
             ),
           ),
@@ -5959,6 +6894,144 @@ class AliExpressViabilityRecord {
   }
 }
 
+enum _AlertTone { success, warning, error }
+
+class _ModalAlertIcon extends StatefulWidget {
+  const _ModalAlertIcon({required this.tone, required this.color});
+
+  final _AlertTone tone;
+  final Color color;
+
+  @override
+  State<_ModalAlertIcon> createState() => _ModalAlertIconState();
+}
+
+class _ModalAlertIconState extends State<_ModalAlertIcon>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 850),
+    )..forward();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 42,
+      height: 42,
+      child: AnimatedBuilder(
+        animation: _controller,
+        builder: (context, _) {
+          final t = Curves.easeOutBack.transform(_controller.value);
+          return CustomPaint(
+            painter: _ModalAlertPainter(
+              tone: widget.tone,
+              color: widget.color,
+              progress: t,
+              pulse: _controller.value,
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _ModalAlertPainter extends CustomPainter {
+  const _ModalAlertPainter({
+    required this.tone,
+    required this.color,
+    required this.progress,
+    required this.pulse,
+  });
+
+  final _AlertTone tone;
+  final Color color;
+  final double progress;
+  final double pulse;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = size.center(Offset.zero);
+    final radius = size.width / 2 - 3;
+    final ring = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.5
+      ..color = color;
+    if (tone == _AlertTone.warning) {
+      canvas.drawCircle(
+        center,
+        radius + (pulse * 4),
+        Paint()..color = color.withValues(alpha: 0.12 * (1 - pulse)),
+      );
+    }
+    canvas.drawCircle(center, radius, ring);
+    final mark = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.6
+      ..strokeCap = StrokeCap.round
+      ..color = color;
+    if (tone == _AlertTone.success) {
+      final p1 = Offset(size.width * .28, size.height * .53);
+      final p2 = Offset(size.width * .43, size.height * .68);
+      final p3 = Offset(size.width * .74, size.height * .35);
+      final path = Path()..moveTo(p1.dx, p1.dy);
+      if (progress < .55) {
+        final local = progress / .55;
+        path.lineTo(
+          lerpDouble(p1.dx, p2.dx, local)!,
+          lerpDouble(p1.dy, p2.dy, local)!,
+        );
+      } else {
+        path.lineTo(p2.dx, p2.dy);
+        final local = (progress - .55) / .45;
+        path.lineTo(
+          lerpDouble(p2.dx, p3.dx, local)!,
+          lerpDouble(p2.dy, p3.dy, local)!,
+        );
+      }
+      canvas.drawPath(path, mark);
+    } else if (tone == _AlertTone.error) {
+      final leftA = Offset(size.width * .34, size.height * .34);
+      final leftB = Offset(size.width * .66, size.height * .66);
+      final rightA = Offset(size.width * .66, size.height * .34);
+      final rightB = Offset(size.width * .34, size.height * .66);
+      canvas.drawLine(leftA, Offset.lerp(leftA, leftB, progress)!, mark);
+      canvas.drawLine(rightA, Offset.lerp(rightA, rightB, progress)!, mark);
+    } else {
+      canvas.drawLine(
+        Offset(size.width * .5, size.height * .25),
+        Offset(size.width * .5, size.height * (.25 + .35 * progress)),
+        mark,
+      );
+      canvas.drawCircle(
+        Offset(size.width * .5, size.height * .73),
+        2.8 + (1 - progress) * 2,
+        Paint()..color = color,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ModalAlertPainter oldDelegate) {
+    return oldDelegate.progress != progress ||
+        oldDelegate.pulse != pulse ||
+        oldDelegate.color != color ||
+        oldDelegate.tone != tone;
+  }
+}
+
 class InventoryItemDraft {
   const InventoryItemDraft({
     required this.productName,
@@ -6033,7 +7106,8 @@ class InventoryItemRecord {
   String get warehouse => draft.warehouse;
   String get status => draft.status;
   int? get sourceViabilityId => draft.sourceViabilityId;
-  String get statusLabel => status == 'in_transit' ? 'En transito' : 'Disponible';
+  String get statusLabel =>
+      status == 'in_transit' ? 'En transito' : 'Disponible';
 
   factory InventoryItemRecord.fromDraft(int id, InventoryItemDraft draft) {
     final now = DateTime.now().toIso8601String();
@@ -6325,6 +7399,88 @@ BoxDecoration _fieldDecoration() {
   );
 }
 
+BoxDecoration _applePanelDecoration() {
+  if (_isNeoSkin) {
+    return BoxDecoration(
+      color: const Color(0xffeef2f7),
+      borderRadius: BorderRadius.circular(28),
+      border: Border.all(color: Colors.white.withValues(alpha: 0.7)),
+      boxShadow: const [
+        BoxShadow(
+          color: Color(0x33000000),
+          blurRadius: 28,
+          offset: Offset(0, 18),
+        ),
+        BoxShadow(color: Colors.white, blurRadius: 16, offset: Offset(-8, -8)),
+      ],
+    );
+  }
+  return BoxDecoration(
+    color: _CyberColors.card.withValues(alpha: 0.92),
+    borderRadius: BorderRadius.circular(18),
+    border: Border.all(color: _CyberColors.primary.withValues(alpha: 0.24)),
+    boxShadow: [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: 0.35),
+        blurRadius: 30,
+        offset: const Offset(0, 18),
+      ),
+    ],
+  );
+}
+
+BoxDecoration _appleCardDecoration() {
+  if (_isNeoSkin) {
+    return BoxDecoration(
+      color: const Color(0xfff7f9fc),
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: Colors.white.withValues(alpha: 0.8)),
+      boxShadow: const [
+        BoxShadow(
+          color: Color(0x22000000),
+          blurRadius: 16,
+          offset: Offset(0, 8),
+        ),
+        BoxShadow(color: Colors.white, blurRadius: 10, offset: Offset(-5, -5)),
+      ],
+    );
+  }
+  return BoxDecoration(
+    color: _CyberColors.bgDarker.withValues(alpha: 0.72),
+    borderRadius: BorderRadius.circular(14),
+    border: Border.all(color: _CyberColors.border.withValues(alpha: 0.8)),
+  );
+}
+
+BoxDecoration _appleFloatingDecoration() {
+  if (_isNeoSkin) {
+    return BoxDecoration(
+      color: const Color(0xfff8fafc),
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: Colors.white.withValues(alpha: 0.9)),
+      boxShadow: const [
+        BoxShadow(
+          color: Color(0x33000000),
+          blurRadius: 24,
+          offset: Offset(0, 14),
+        ),
+      ],
+    );
+  }
+  return BoxDecoration(
+    color: const Color(0xff111827),
+    borderRadius: BorderRadius.circular(14),
+    border: Border.all(color: _CyberColors.secondary.withValues(alpha: 0.28)),
+    boxShadow: [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: 0.45),
+        blurRadius: 26,
+        offset: const Offset(0, 14),
+      ),
+    ],
+  );
+}
+
 int _pageCount(int totalItems, int pageSize) {
   if (totalItems <= 0) return 1;
   return (totalItems / pageSize).ceil();
@@ -6354,6 +7510,30 @@ String _normalizeSearchText(String value) {
       .replaceAll('ñ', 'n')
       .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
       .trim();
+}
+
+Uint8List? _avatarBytes(String value) {
+  final raw = value.trim();
+  if (raw.isEmpty) return null;
+  try {
+    final payload = raw.contains(',') ? raw.split(',').last : raw;
+    return base64Decode(payload);
+  } catch (_) {
+    return null;
+  }
+}
+
+String? _passwordValidationError(String password, {bool allowEmpty = false}) {
+  if (allowEmpty && password.isEmpty) return null;
+  if (password.length < 8) {
+    return 'La contrasena debe tener minimo 8 caracteres.';
+  }
+  if (!RegExp(r'[A-Za-z]').hasMatch(password) ||
+      !RegExp(r'\d').hasMatch(password) ||
+      !RegExp(r'[^A-Za-z0-9]').hasMatch(password)) {
+    return 'La contrasena debe incluir letras, numeros y un caracter especial.';
+  }
+  return null;
 }
 
 InputDecoration _inputDecoration({

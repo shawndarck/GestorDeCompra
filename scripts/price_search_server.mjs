@@ -262,6 +262,7 @@ function runMigrations() {
   ensureColumn('users', 'status', "TEXT NOT NULL DEFAULT 'active'");
   ensureColumn('users', 'profile_name', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('users', 'phone', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('users', 'avatar_data', "TEXT NOT NULL DEFAULT ''");
   for (const table of ['purchases', 'aliexpress_viabilities', 'inventory_items', 'sales']) {
     ensureColumn(table, 'tenant_id', 'INTEGER');
   }
@@ -447,6 +448,18 @@ function verifyPassword(password, user) {
   return stored.length === incoming.length && timingSafeEqual(stored, incoming);
 }
 
+function validatePasswordStrength(password) {
+  const value = String(password ?? '');
+  if (value.length < 8) {
+    throw new Error('La contrasena debe tener minimo 8 caracteres.');
+  }
+  if (!/[A-Za-z]/.test(value) || !/\d/.test(value) || !/[^A-Za-z0-9]/.test(value)) {
+    throw new Error(
+      'La contrasena debe incluir letras, numeros y un caracter especial.',
+    );
+  }
+}
+
 function publicUser(row) {
   const permissions = permissionsForUser(row);
   return {
@@ -459,6 +472,7 @@ function publicUser(row) {
     status: row.status ?? 'active',
     profileName: row.profile_name ?? '',
     phone: row.phone ?? '',
+    avatarData: row.avatar_data ?? '',
     permissions,
     stores: row.tenant_id ? listMercadoLibreStores(row) : [],
   };
@@ -542,7 +556,7 @@ function registerUser(input) {
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
     throw new Error('Escribe un correo valido.');
   }
-  if (password.length < 8) throw new Error('La contraseña debe tener minimo 8 caracteres.');
+  validatePasswordStrength(password);
   const userCount = db.prepare('SELECT COUNT(*) AS count FROM users').get().count;
   if (userCount > 0) {
     throw new Error('Solo el Super Admin puede crear nuevos usuarios principales.');
@@ -576,6 +590,44 @@ function loginUser(input) {
     throw new Error('Este usuario esta inactivo.');
   }
   return createSession(user);
+}
+
+function updateAuthProfile(user, input) {
+  const profileName = String(input.profileName ?? input.profile_name ?? '').trim();
+  const password = String(input.password ?? '');
+  const avatarData = String(input.avatarData ?? input.avatar_data ?? '').trim();
+  if (profileName.length < 2) {
+    throw new Error('El nombre de perfil debe tener minimo 2 caracteres.');
+  }
+  if (avatarData && !avatarData.startsWith('data:image/')) {
+    throw new Error('La foto debe ser una imagen valida.');
+  }
+  if (avatarData.length > 900000) {
+    throw new Error('La foto es muy pesada. Usa una imagen mas liviana.');
+  }
+  if (password.trim()) {
+    validatePasswordStrength(password);
+    const { hash, salt } = hashPassword(password);
+    db.prepare(
+      `
+        UPDATE users
+        SET profile_name = ?, avatar_data = ?, password_hash = ?, salt = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `,
+    ).run(profileName, avatarData, hash, salt, user.id);
+    db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(user.id);
+  } else {
+    db.prepare(
+      `
+        UPDATE users
+        SET profile_name = ?, avatar_data = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `,
+    ).run(profileName, avatarData, user.id);
+  }
+  const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+  return createSession(updated);
 }
 
 async function requestPasswordReset(input) {
@@ -626,7 +678,7 @@ function confirmPasswordReset(input) {
   const email = String(input.email ?? '').trim().toLowerCase();
   const code = String(input.code ?? '').trim();
   const password = String(input.password ?? '');
-  if (password.length < 8) throw new Error('La contraseña debe tener minimo 8 caracteres.');
+  validatePasswordStrength(password);
   const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
   if (!user) throw new Error('Codigo invalido o vencido.');
   const reset = db
@@ -670,7 +722,7 @@ function createPrincipalUser(input) {
   const phone = String(input.phone ?? '').trim();
   if (username.length < 3) throw new Error('El usuario debe tener minimo 3 caracteres.');
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('Escribe un correo valido.');
-  if (password.length < 8) throw new Error('La contrasena debe tener minimo 8 caracteres.');
+  validatePasswordStrength(password);
   const { hash, salt } = hashPassword(password);
   const userResult = db
     .prepare(
@@ -745,7 +797,7 @@ function createCollaborator(user, input) {
   const permissions = normalizePermissionList(input.permissions);
   if (username.length < 3) throw new Error('El usuario debe tener minimo 3 caracteres.');
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('Escribe un correo valido.');
-  if (password.length < 8) throw new Error('La contrasena debe tener minimo 8 caracteres.');
+  validatePasswordStrength(password);
   const { hash, salt } = hashPassword(password);
   const result = db
     .prepare(
@@ -1969,6 +2021,13 @@ const server = http.createServer(async (req, res) => {
   }
   const user = requireAuth(req, res);
   if (!user) return;
+  if (req.url === '/auth/profile' && req.method === 'PUT') {
+    try {
+      return json(res, 200, updateAuthProfile(user, await readJson(req)));
+    } catch (error) {
+      return json(res, 400, { message: error?.message ?? 'No pude actualizar perfil.' });
+    }
+  }
   if (req.url === '/permissions' && req.method === 'GET') {
     return json(res, 200, { permissions: listPermissions() });
   }
