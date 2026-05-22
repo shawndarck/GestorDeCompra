@@ -1,6 +1,6 @@
 # PriceSec
 
-Propietario del proyecto/producto: **SHAWNDARCK**.
+Propietario del proyecto/producto: **JULIAN C. PAREDES (SHAWNDARCK)**.
 
 PriceSec es una app Flutter Web local para:
 
@@ -14,8 +14,16 @@ PriceSec es una app Flutter Web local para:
 - Buscar y paginar registros guardados para evitar listas infinitas.
 - Proteger la app con login, registro inicial de super admin y recuperacion de contraseña.
 - Consultar automaticamente la TRM USD -> COP desde una API gratuita.
+- Cambiar entre dos visuales: `Vista Cyber` y `Vista Neo`.
+- Navegar desde el modulo `Sistema de Gestion`, organizado por categorias.
 
 El proyecto corre localmente. No es una app desplegada en internet.
+
+Todas las visuales muestran un footer de propiedad:
+
+```text
+Este programa es propiedad de JULIAN C. PAREDES (SHAWNDARCK)
+```
 
 ## Estructura Principal
 
@@ -59,7 +67,7 @@ Si un puerto esta ocupado, puedes usar otro para Flutter, pero el backend debe q
 
 ## Como Levantar El Proyecto
 
-1. Clona o descarga el repo de SHAWNDARCK.
+1. Clona o descarga el repo de JULIAN C. PAREDES (SHAWNDARCK).
 
 2. Abre PowerShell en la carpeta del proyecto:
 
@@ -206,6 +214,53 @@ La pestana `Comparador` permite:
 
 Si una tienda no expone rating, ventas o envio en el resultado, PriceSec no descarta automaticamente el producto por ese campo; compara principalmente por mejor precio disponible.
 
+## Vistas Visuales
+
+PriceSec tiene dos interfaces seleccionables desde el boton superior:
+
+```text
+Vista Cyber
+Vista Neo
+```
+
+`Vista Cyber` usa una apariencia oscura con acentos verdes, bordes luminosos y
+paneles tipo dashboard tecnico.
+
+`Vista Neo` usa una apariencia clara, limpia y suave, con tarjetas blancas,
+bordes sutiles y sombras elegantes.
+
+Ambas vistas conservan los mismos modulos, permisos y datos. El cambio es solo
+visual.
+
+## Sistema De Gestion
+
+El modulo `Sistema de Gestion` funciona como una central de navegacion del
+producto.
+
+Incluye:
+
+- Busqueda inteligente de modulos.
+- Accesos rapidos a los modulos principales.
+- Tarjetas por categoria:
+  - Inicio
+  - Inventario
+  - Ventas
+  - Compras
+  - Integraciones
+  - Configuracion
+- Acceso a `Inventario general`.
+- Acceso a `Registrar inventario`.
+- Acceso a `Registrar ventas`.
+- Acceso a `Registrar compra`.
+- Acceso a `Compras guardadas`.
+- Acceso a `Tiendas Mercado Libre`.
+- Acceso a `Colaboradores`.
+
+El modulo se adapta a la vista activa:
+
+- En `Vista Cyber`, usa paneles oscuros, iconos verdes y tarjetas con borde.
+- En `Vista Neo`, usa paneles claros, iconos morados y tarjetas tipo Apple.
+
 ## Login Y Super Admin
 
 PriceSec exige iniciar sesion antes de entrar al dashboard.
@@ -216,7 +271,7 @@ El primer registro creado en una base nueva se guarda automaticamente como:
 role = super_admin
 ```
 
-Ese primer usuario debe ser el dueño/administrador inicial del producto de SHAWNDARCK.
+Ese primer usuario debe ser el dueño/administrador inicial del producto de JULIAN C. PAREDES (SHAWNDARCK).
 
 Los usuarios se guardan en SQLite en la tabla:
 
@@ -263,7 +318,7 @@ Tabla local de salida:
 auth_email_outbox
 ```
 
-Para produccion o despliegue real, conecta esa bandeja a un proveedor SMTP/API de email autorizado por SHAWNDARCK.
+Para produccion o despliegue real, conecta esa bandeja a un proveedor SMTP/API de email autorizado por JULIAN C. PAREDES (SHAWNDARCK).
 
 ### SMTP Gratuito Con Gmail
 
@@ -432,7 +487,14 @@ pricesec_aliexpress_viability_backup
 
 ## Inventario
 
-El modulo `Registrar inventario` permite cargar stock por producto y bodega.
+La gestion de inventario vive dentro de `Sistema de Gestion`.
+
+Desde esa central puedes entrar a:
+
+- `Inventario general`: vista agrupada por producto y bodega.
+- `Sistema de Gestion`: formulario para cargar stock y revisar movimientos.
+
+El formulario permite cargar stock por producto y bodega.
 
 Campos obligatorios:
 
@@ -443,7 +505,10 @@ Campos obligatorios:
 - Fecha de carga.
 - Bodega.
 
-El listado del modulo tiene busqueda inteligente por producto o bodega. Si un producto queda con menos de 3 unidades, PriceSec muestra una alerta de inventario bajo.
+El listado mantiene el historial de movimientos con fecha, usuario, producto,
+cantidad, costo, precio de venta y bodega. Tambien tiene busqueda inteligente
+por producto o bodega. Si un producto queda con menos de 3 unidades, PriceSec
+muestra una alerta de inventario bajo.
 
 ## Ventas
 

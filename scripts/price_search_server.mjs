@@ -1244,13 +1244,19 @@ function extractionExpression(storeKey, storeLabel) {
       const days = text.match(/([0-9]{1,2})\\s*(?:days?|dias|días)/i);
       return days ? Number.parseInt(days[1], 10) : 0;
     };
+    const hasShippingSignal = (text) => /shipping|env[ií]o|delivery|entrega|despacho|gratis|free/i.test(text);
     const hasFreeShipping = (text) => /free shipping|env[ií]o gratis|env[ií]o incluido|gratis/i.test(text);
 
     const isProductLink = (href) => {
       if ('${storeKey}' === 'amazon') return /\\/dp\\/|\\/gp\\/product\\//i.test(href);
       if ('${storeKey}' === 'aliexpress') return /\\/item\\/|item\\//i.test(href);
-      if ('${storeKey}' === 'temu') return /\\/g-|goods|product/i.test(href);
-      if ('${storeKey}' === 'shein') return /-p-\\d+|\\/p-\\d+|product/i.test(href);
+      if ('${storeKey}' === 'temu') return /\\/g-|goods|product|goods_id|_goods/i.test(href);
+      if ('${storeKey}' === 'shein') return /-p-\\d+|\\/p-\\d+|product|goods_id/i.test(href);
+      return true;
+    };
+    const isUsefulLink = (href) => {
+      if (!href || href.includes('javascript:') || href.startsWith('mailto:')) return false;
+      if (/login|signin|account|cart|help|privacy|terms|category|campaign/i.test(href)) return false;
       return true;
     };
 
@@ -1260,7 +1266,7 @@ function extractionExpression(storeKey, storeLabel) {
     for (const anchor of anchors) {
       const href = new URL(anchor.getAttribute('href'), location.href).href;
       if (seen.has(href) || href.includes('javascript:')) continue;
-      if (!isProductLink(href)) continue;
+      if (!isProductLink(href) && (!isUsefulLink(href) || results.length > 0)) continue;
       seen.add(href);
       const card = anchor.closest('article, li, [data-component-type], [class*=product], [class*=item], [class*=card], div') || anchor;
       const imageText = Array.from(card.querySelectorAll?.('img[alt]') || [])
@@ -1278,6 +1284,7 @@ function extractionExpression(storeKey, storeLabel) {
         priceVisible: price > 0,
         rating: parseRating(text),
         sales: parseSales(text),
+        shippingKnown: hasShippingSignal(text),
         shippingIncluded: hasFreeShipping(text),
         deliveryDays: parseDelivery(text),
         listingUrl: href
@@ -1296,8 +1303,8 @@ function filterResults(results, filters) {
     if (!result.listingUrl) return false;
     if (result.rating > 0 && result.rating < minRating) return false;
     if (result.sales > 0 && result.sales < minSales) return false;
-    if (shippingFilter === 'included' && result.priceVisible !== false && !result.shippingIncluded) return false;
-    if (shippingFilter === 'notIncluded' && result.shippingIncluded) return false;
+    if (shippingFilter === 'included' && result.shippingKnown === true && !result.shippingIncluded) return false;
+    if (shippingFilter === 'notIncluded' && result.shippingKnown === true && result.shippingIncluded) return false;
     return true;
   }).sort((a, b) => (a.totalPrice || Number.MAX_SAFE_INTEGER) - (b.totalPrice || Number.MAX_SAFE_INTEGER));
 }
@@ -2311,3 +2318,4 @@ server.listen(PORT, () => {
   console.log(`PriceSec local search service: http://localhost:${PORT}`);
   console.log(`Chrome profile: ${PROFILE_DIR}`);
 });
+

@@ -73,15 +73,16 @@ enum ShippingFilter {
 }
 
 enum StoreOption {
-  aliexpress('AliExpress', Icons.travel_explore),
-  temu('Temu', Icons.local_mall),
-  shein('Shein', Icons.checkroom),
-  amazon('Amazon', Icons.shopping_cart);
+  aliexpress('AliExpress', Icons.travel_explore, Color(0xffef2b00)),
+  temu('Temu', Icons.shopping_bag, Color(0xffff6a00)),
+  shein('Shein', Icons.checkroom, Color(0xff111827)),
+  amazon('Amazon', Icons.shopping_cart, Color(0xffff9900));
 
-  const StoreOption(this.label, this.icon);
+  const StoreOption(this.label, this.icon, this.brandColor);
 
   final String label;
   final IconData icon;
+  final Color brandColor;
 }
 
 enum _VisualSkin {
@@ -123,8 +124,8 @@ class _NeoColors {
   static const shadowLight = Color(0xffffffff);
   static const primary = Color(0xff6366f1);
   static const success = Color(0xff22c55e);
-  static const textPrimary = Color(0xff374151);
-  static const textSecondary = Color(0xff6b7280);
+  static const textPrimary = Color(0xff111827);
+  static const textSecondary = Color(0xff475569);
   static const lightEdge = Color(0xffd6dde7);
 }
 
@@ -437,16 +438,33 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
                               onRun: _runComparison,
                               isRunning: _isRunning,
                             );
-                            final monitor = _MonitorVisual(
-                              filters: _filters,
-                              isRunning: _isRunning,
+                            final filters = _CriteriaPanel(
+                              ratingOptions: _ratingOptions,
+                              salesOptions: _salesOptions,
+                              minRating: _minRating,
+                              minSales: _minSales,
+                              shippingFilter: _shippingFilter,
+                              selectedStores: _selectedStores,
+                              onRatingChanged: (value) {
+                                if (value == null) return;
+                                setState(() => _minRating = value);
+                              },
+                              onSalesChanged: (value) {
+                                if (value == null) return;
+                                setState(() => _minSales = value);
+                              },
+                              onShippingFilterChanged: (value) {
+                                if (value == null) return;
+                                setState(() => _shippingFilter = value);
+                              },
+                              onStoreToggled: _toggleStore,
                             );
                             if (!wide) {
                               return Column(
                                 children: [
                                   search,
                                   const SizedBox(height: 18),
-                                  monitor,
+                                  filters,
                                 ],
                               );
                             }
@@ -455,32 +473,10 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
                               children: [
                                 Expanded(flex: 6, child: search),
                                 const SizedBox(width: 24),
-                                Expanded(flex: 4, child: monitor),
+                                Expanded(flex: 5, child: filters),
                               ],
                             );
                           },
-                        ),
-                        const SizedBox(height: 18),
-                        _CriteriaPanel(
-                          ratingOptions: _ratingOptions,
-                          salesOptions: _salesOptions,
-                          minRating: _minRating,
-                          minSales: _minSales,
-                          shippingFilter: _shippingFilter,
-                          selectedStores: _selectedStores,
-                          onRatingChanged: (value) {
-                            if (value == null) return;
-                            setState(() => _minRating = value);
-                          },
-                          onSalesChanged: (value) {
-                            if (value == null) return;
-                            setState(() => _minSales = value);
-                          },
-                          onShippingFilterChanged: (value) {
-                            if (value == null) return;
-                            setState(() => _shippingFilter = value);
-                          },
-                          onStoreToggled: _toggleStore,
                         ),
                         const SizedBox(height: 18),
                         _ResultsPanel(
@@ -561,6 +557,8 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
                           message: _storeMessage,
                           onSave: _saveMercadoLibreStore,
                         ),
+                      const SizedBox(height: 22),
+                      const _OwnershipFooter(),
                     ],
                   ),
                 ),
@@ -2024,42 +2022,129 @@ class _AuthRingPainter extends CustomPainter {
 }
 
 class _ModuleOption {
-  const _ModuleOption(this.index, this.icon, this.label);
+  const _ModuleOption(this.index, this.icon, this.label, this.description);
 
   final int index;
   final IconData icon;
   final String label;
+  final String description;
 }
 
 class _ModuleCategory {
-  const _ModuleCategory(this.title, this.icon, this.indices);
+  const _ModuleCategory(this.title, this.icon, this.description, this.indices);
 
   final String title;
   final IconData icon;
+  final String description;
   final List<int> indices;
 }
 
 const _moduleOptions = [
-  _ModuleOption(0, Icons.compare_arrows, 'Comparador'),
-  _ModuleOption(1, Icons.inventory_2, 'Registrar compra'),
-  _ModuleOption(2, Icons.list_alt, 'Compras guardadas'),
-  _ModuleOption(3, Icons.fact_check, 'Viabilidad AliExpress'),
-  _ModuleOption(4, Icons.table_rows, 'Viabilidades guardadas'),
-  _ModuleOption(5, Icons.dashboard_customize, 'Sistema de Gestion'),
-  _ModuleOption(6, Icons.point_of_sale, 'Registrar ventas'),
-  _ModuleOption(10, Icons.inventory, 'Inventario general'),
-  _ModuleOption(7, Icons.admin_panel_settings, 'Usuarios principales'),
-  _ModuleOption(8, Icons.group_add, 'Colaboradores'),
-  _ModuleOption(9, Icons.storefront, 'Tiendas Mercado Libre'),
+  _ModuleOption(
+    0,
+    Icons.compare_arrows,
+    'Comparador',
+    'Busca mejores precios entre tiendas.',
+  ),
+  _ModuleOption(
+    1,
+    Icons.inventory_2,
+    'Registrar compra',
+    'Registra compras e importaciones.',
+  ),
+  _ModuleOption(
+    2,
+    Icons.list_alt,
+    'Compras guardadas',
+    'Consulta y edita compras registradas.',
+  ),
+  _ModuleOption(
+    3,
+    Icons.fact_check,
+    'Viabilidad AliExpress',
+    'Calcula si un producto es viable.',
+  ),
+  _ModuleOption(
+    4,
+    Icons.table_rows,
+    'Viabilidades guardadas',
+    'Revisa estudios guardados.',
+  ),
+  _ModuleOption(
+    5,
+    Icons.dashboard_customize,
+    'Sistema de Gestion',
+    'Ingresa productos y movimientos.',
+  ),
+  _ModuleOption(
+    6,
+    Icons.point_of_sale,
+    'Registrar ventas',
+    'Registra ventas y descuenta stock.',
+  ),
+  _ModuleOption(
+    10,
+    Icons.inventory,
+    'Inventario general',
+    'Consulta inventario agrupado.',
+  ),
+  _ModuleOption(
+    7,
+    Icons.admin_panel_settings,
+    'Usuarios principales',
+    'Administra usuarios principales.',
+  ),
+  _ModuleOption(
+    8,
+    Icons.group_add,
+    'Colaboradores',
+    'Gestiona permisos y accesos.',
+  ),
+  _ModuleOption(
+    9,
+    Icons.storefront,
+    'Tiendas Mercado Libre',
+    'Conecta y consulta tiendas.',
+  ),
 ];
 
 const _moduleCategories = [
-  _ModuleCategory('Inicio', Icons.home, [0]),
-  _ModuleCategory('Inventario', Icons.inventory_2, [10, 5]),
-  _ModuleCategory('Ventas', Icons.shopping_cart, [6]),
-  _ModuleCategory('Compras', Icons.business_center, [1, 2, 3, 4]),
-  _ModuleCategory('Integraciones', Icons.link, [9]),
-  _ModuleCategory('Configuracion', Icons.settings, [7, 8]),
+  _ModuleCategory(
+    'Inicio',
+    Icons.home,
+    'Accede al modulo principal del comparador.',
+    [0],
+  ),
+  _ModuleCategory(
+    'Inventario',
+    Icons.inventory_2,
+    'Gestiona y consulta tu inventario de productos.',
+    [10, 5],
+  ),
+  _ModuleCategory(
+    'Ventas',
+    Icons.shopping_cart,
+    'Registra y administra tus ventas realizadas.',
+    [6],
+  ),
+  _ModuleCategory(
+    'Compras',
+    Icons.business_center,
+    'Administra tus compras, viabilidades y proveedores.',
+    [1, 2, 3, 4],
+  ),
+  _ModuleCategory(
+    'Integraciones',
+    Icons.link,
+    'Conecta tu tienda con plataformas externas.',
+    [9],
+  ),
+  _ModuleCategory(
+    'Configuracion',
+    Icons.settings,
+    'Administra usuarios y permisos del sistema.',
+    [7, 8],
+  ),
 ];
 
 class _ModuleSelector extends StatefulWidget {
@@ -2106,26 +2191,48 @@ class _ModuleSelectorState extends State<_ModuleSelector> {
         : _CyberColors.textSecondary;
     final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.primary;
 
+    final showDashboard =
+        _open || widget.activeIndex == 5 || query.trim().isNotEmpty;
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: EdgeInsets.all(_isNeoSkin ? 22 : 20),
       decoration: _isNeoSkin
-          ? _applePanelDecoration()
-          : _cyberPanelDecoration(radius: 14),
+          ? BoxDecoration(
+              color: const Color(0xfffbfcff),
+              borderRadius: BorderRadius.circular(22),
+              border: Border.all(color: const Color(0xffe2e8f0)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.08),
+                  blurRadius: 28,
+                  offset: const Offset(0, 16),
+                ),
+              ],
+            )
+          : _cyberPanelDecoration(radius: 14, glow: true),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
               Container(
-                width: 42,
-                height: 42,
+                width: _isNeoSkin ? 54 : 52,
+                height: _isNeoSkin ? 54 : 52,
                 decoration: BoxDecoration(
                   color: accent.withValues(alpha: 0.13),
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(_isNeoSkin ? 16 : 14),
+                  boxShadow: _isNeoSkin
+                      ? [
+                          BoxShadow(
+                            color: accent.withValues(alpha: 0.12),
+                            blurRadius: 18,
+                            offset: const Offset(0, 10),
+                          ),
+                        ]
+                      : null,
                 ),
                 child: Icon(Icons.store_mall_directory, color: accent),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 16),
               Expanded(
                 child: InkWell(
                   borderRadius: BorderRadius.circular(12),
@@ -2138,7 +2245,7 @@ class _ModuleSelectorState extends State<_ModuleSelector> {
                         style: TextStyle(
                           color: textPrimary,
                           fontWeight: FontWeight.w900,
-                          fontSize: 16,
+                          fontSize: _isNeoSkin ? 20 : 19,
                         ),
                       ),
                       Text(
@@ -2154,7 +2261,7 @@ class _ModuleSelectorState extends State<_ModuleSelector> {
                 ),
               ),
               SizedBox(
-                width: math.min(390, MediaQuery.sizeOf(context).width * 0.5),
+                width: math.min(420, MediaQuery.sizeOf(context).width * 0.48),
                 child: TextField(
                   controller: _searchController,
                   onChanged: (_) => setState(() => _open = true),
@@ -2170,61 +2277,103 @@ class _ModuleSelectorState extends State<_ModuleSelector> {
                 ),
               ),
               const SizedBox(width: 10),
-              IconButton(
-                tooltip: _open ? 'Cerrar menu' : 'Abrir menu',
-                onPressed: () => setState(() => _open = !_open),
-                icon: Icon(_open ? Icons.expand_less : Icons.expand_more),
-                color: textPrimary,
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  IconButton(
+                    tooltip: _open ? 'Cerrar menu' : 'Abrir menu',
+                    onPressed: () => setState(() => _open = !_open),
+                    icon: Icon(
+                      showDashboard
+                          ? Icons.notifications_none
+                          : Icons.expand_more,
+                    ),
+                    color: textPrimary,
+                  ),
+                  if (showDashboard)
+                    Positioned(
+                      right: 8,
+                      top: 8,
+                      child: Container(
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          color: accent,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 24),
           Wrap(
-            spacing: 10,
+            spacing: 0,
             runSpacing: 10,
             children: [
-              for (final category in _moduleCategories)
-                for (final option in _optionsForCategory(
-                  category,
-                  widget.options,
-                ))
-                  _ModuleOptionButton(
-                    icon: option.icon,
-                    label: option.label,
-                    selected: widget.activeIndex == option.index,
-                    onTap: () => widget.onChanged(option.index),
+              for (final option in _primaryOptions(widget.options))
+                Padding(
+                  padding: const EdgeInsets.only(right: 0),
+                  child: SizedBox(
+                    width: _isNeoSkin ? 206 : 190,
+                    child: _ModuleOptionButton(
+                      icon: option.icon,
+                      label: option.label,
+                      selected: widget.activeIndex == option.index,
+                      onTap: () {
+                        widget.onChanged(option.index);
+                        if (option.index == 5) {
+                          setState(() => _open = true);
+                        }
+                      },
+                    ),
                   ),
+                ),
             ],
           ),
           AnimatedSwitcher(
             duration: const Duration(milliseconds: 180),
-            child: !_open
+            child: !showDashboard
                 ? const SizedBox.shrink()
                 : Padding(
-                    padding: const EdgeInsets.only(top: 18),
+                    padding: const EdgeInsets.only(top: 22),
                     child: query.trim().isNotEmpty
-                        ? Wrap(
-                            spacing: 10,
-                            runSpacing: 10,
-                            children: [
-                              for (final option in filtered)
-                                _ModuleOptionButton(
-                                  icon: option.icon,
-                                  label: option.label,
-                                  selected: widget.activeIndex == option.index,
-                                  onTap: () {
-                                    widget.onChanged(option.index);
-                                    setState(() => _open = false);
-                                  },
-                                ),
-                            ],
+                        ? Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(14),
+                            decoration: _isNeoSkin
+                                ? _appleCardDecoration()
+                                : _fieldDecoration(),
+                            child: Wrap(
+                              spacing: 10,
+                              runSpacing: 10,
+                              children: [
+                                for (final option in filtered)
+                                  _ModuleOptionButton(
+                                    icon: option.icon,
+                                    label: option.label,
+                                    selected:
+                                        widget.activeIndex == option.index,
+                                    onTap: () {
+                                      widget.onChanged(option.index);
+                                      setState(() => _open = false);
+                                    },
+                                  ),
+                                if (filtered.isEmpty)
+                                  Text(
+                                    'No encontre modulos relacionados.',
+                                    style: _supportTextStyle(),
+                                  ),
+                              ],
+                            ),
                           )
                         : _MegaMenuGrid(
                             options: widget.options,
                             activeIndex: widget.activeIndex,
                             onChanged: (index) {
                               widget.onChanged(index);
-                              setState(() => _open = false);
+                              setState(() => _open = index == 5);
                             },
                             textPrimary: textPrimary,
                             textSecondary: textSecondary,
@@ -2237,12 +2386,10 @@ class _ModuleSelectorState extends State<_ModuleSelector> {
     );
   }
 
-  List<_ModuleOption> _optionsForCategory(
-    _ModuleCategory category,
-    List<_ModuleOption> options,
-  ) {
+  List<_ModuleOption> _primaryOptions(List<_ModuleOption> options) {
+    const primary = [0, 10, 5, 6, 1, 2];
     return [
-      for (final index in category.indices)
+      for (final index in primary)
         for (final option in options)
           if (option.index == index) option,
     ];
@@ -2273,8 +2420,27 @@ class _MegaMenuGrid extends StatelessWidget {
         if (_categoryOptions(category).isNotEmpty) category,
     ];
     return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: _isNeoSkin ? _appleCardDecoration() : _fieldDecoration(),
+      padding: const EdgeInsets.all(22),
+      decoration: _isNeoSkin
+          ? BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.7),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: const Color(0xffe2e8f0)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.05),
+                  blurRadius: 22,
+                  offset: const Offset(0, 12),
+                ),
+              ],
+            )
+          : BoxDecoration(
+              color: _CyberColors.bgDarker.withValues(alpha: 0.28),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: _CyberColors.border.withValues(alpha: 0.75),
+              ),
+            ),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final columns = constraints.maxWidth < 720 ? 2 : 3;
@@ -2284,7 +2450,7 @@ class _MegaMenuGrid extends StatelessWidget {
             crossAxisCount: columns,
             mainAxisSpacing: 16,
             crossAxisSpacing: 16,
-            childAspectRatio: constraints.maxWidth < 720 ? 1.55 : 1.9,
+            childAspectRatio: constraints.maxWidth < 720 ? 1.25 : 1.46,
             children: [
               for (final category in visibleCategories)
                 _MegaMenuCategory(
@@ -2340,36 +2506,78 @@ class _MegaMenuCategory extends StatelessWidget {
     ];
     if (categoryOptions.isEmpty) return const SizedBox.shrink();
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
         color: _isNeoSkin
-            ? Colors.white.withValues(alpha: 0.34)
-            : _CyberColors.bgDarker.withValues(alpha: 0.38),
-        borderRadius: BorderRadius.circular(_isNeoSkin ? 18 : 10),
+            ? Colors.white
+            : _CyberColors.bgDarker.withValues(alpha: 0.42),
+        borderRadius: BorderRadius.circular(_isNeoSkin ? 18 : 12),
         border: Border.all(
           color: _isNeoSkin
-              ? _NeoColors.lightEdge
+              ? const Color(0xffe2e8f0)
               : _CyberColors.border.withValues(alpha: 0.8),
         ),
+        boxShadow: _isNeoSkin
+            ? [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.05),
+                  blurRadius: 18,
+                  offset: const Offset(0, 10),
+                ),
+              ]
+            : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(category.icon, color: accent, size: 20),
-              const SizedBox(width: 8),
-              Text(
-                category.title.toUpperCase(),
-                style: TextStyle(
-                  color: accent,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w900,
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: _isNeoSkin ? 0.1 : 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(category.icon, color: accent, size: 26),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      category.title,
+                      style: TextStyle(
+                        color: textPrimary,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      category.description,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: textSecondary,
+                        height: 1.35,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 18),
+          Divider(
+            color: _isNeoSkin
+                ? const Color(0xffe2e8f0)
+                : _CyberColors.border.withValues(alpha: 0.7),
+          ),
+          const SizedBox(height: 12),
           Expanded(
             child: ListView(
               physics: const NeverScrollableScrollPhysics(),
@@ -2397,9 +2605,9 @@ class _MegaMenuCategory extends StatelessWidget {
                             size: 18,
                             color: activeIndex == option.index
                                 ? accent
-                                : textPrimary,
+                                : textSecondary,
                           ),
-                          const SizedBox(width: 8),
+                          const SizedBox(width: 12),
                           Expanded(
                             child: Text(
                               option.label,
@@ -2413,6 +2621,13 @@ class _MegaMenuCategory extends StatelessWidget {
                                     : FontWeight.w800,
                               ),
                             ),
+                          ),
+                          Icon(
+                            Icons.chevron_right,
+                            color: activeIndex == option.index
+                                ? accent
+                                : textSecondary,
+                            size: 20,
                           ),
                         ],
                       ),
@@ -2484,6 +2699,50 @@ class _ModuleOptionButton extends StatelessWidget {
         onPressed: onTap,
         icon: Icon(icon, size: 18),
         label: Text(label),
+      ),
+    );
+  }
+}
+
+class _OwnershipFooter extends StatelessWidget {
+  const _OwnershipFooter();
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.primary;
+    final textColor = _isNeoSkin
+        ? _NeoColors.textSecondary
+        : _CyberColors.textSecondary;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+      decoration: BoxDecoration(
+        color: _isNeoSkin
+            ? Colors.white.withValues(alpha: 0.68)
+            : _CyberColors.bgDarker.withValues(alpha: 0.42),
+        borderRadius: BorderRadius.circular(_isNeoSkin ? 18 : 12),
+        border: Border.all(
+          color: _isNeoSkin
+              ? const Color(0xffe2e8f0)
+              : _CyberColors.border.withValues(alpha: 0.7),
+        ),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.verified_user_outlined, color: accent, size: 18),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Text(
+              'Este programa es propiedad de JULIAN C. PAREDES (SHAWNDARCK)',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: textColor,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -3096,78 +3355,476 @@ class _SearchPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return _isNeoSkin
+        ? _NeoSearchPanel(
+            controller: controller,
+            onRun: onRun,
+            isRunning: isRunning,
+          )
+        : _CyberSearchPanel(
+            controller: controller,
+            onRun: onRun,
+            isRunning: isRunning,
+          );
+  }
+}
+
+class _NeoSearchPanel extends StatelessWidget {
+  const _NeoSearchPanel({
+    required this.controller,
+    required this.onRun,
+    required this.isRunning,
+  });
+
+  final TextEditingController controller;
+  final VoidCallback onRun;
+  final bool isRunning;
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(28),
-      decoration: _cyberPanelDecoration(),
+      padding: const EdgeInsets.all(30),
+      decoration: BoxDecoration(
+        color: const Color(0xfff8fafc),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xffe2e8f0)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.08),
+            blurRadius: 34,
+            offset: const Offset(0, 18),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xff7c3aed), Color(0xff38bdf8)],
+                  ),
+                  borderRadius: BorderRadius.circular(10),
+                  boxShadow: [
+                    BoxShadow(
+                      color: _NeoColors.primary.withValues(alpha: 0.2),
+                      blurRadius: 14,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: const Icon(Icons.sell_outlined, color: Colors.white),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Comparador de precios',
+                style: _strongTextStyle(fontSize: 18),
+              ),
+            ],
+          ),
+          const SizedBox(height: 42),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Encuentra el mejor precio',
+                      style: TextStyle(
+                        color: _NeoColors.textPrimary,
+                        fontSize: 42,
+                        fontWeight: FontWeight.w900,
+                        height: 1.02,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Busca, filtra y compara productos entre las mejores tiendas online.',
+                      style: _supportTextStyle(fontSize: 18, height: 1.35),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 20),
+              const _StoreVsGraphic(compact: false),
+            ],
+          ),
+          const SizedBox(height: 40),
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: _appleCardDecoration(),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: controller,
+                    onSubmitted: (_) => onRun(),
+                    style: _inputTextStyle(),
+                    decoration: _inputDecoration(
+                      label: 'Que producto estas buscando?',
+                      hint: 'Ej: audifonos bluetooth, teclado mecanico...',
+                      icon: Icons.search,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                SizedBox(
+                  height: 58,
+                  child: FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _NeoColors.primary,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 26),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    onPressed: isRunning ? null : onRun,
+                    icon: Icon(isRunning ? Icons.sync : Icons.search),
+                    label: Text(
+                      isRunning ? 'Comparando' : 'Comparar ahora',
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 34),
+          const Row(
+            children: [
+              Expanded(
+                child: _ComparatorBenefit(
+                  icon: Icons.sell_outlined,
+                  title: 'Compara precios',
+                  body: 'Encuentra la mejor opcion entre diferentes tiendas.',
+                ),
+              ),
+              Expanded(
+                child: _ComparatorBenefit(
+                  icon: Icons.verified_user_outlined,
+                  title: 'Compra seguro',
+                  body: 'Verifica reputacion y calificaciones de tiendas.',
+                ),
+              ),
+              Expanded(
+                child: _ComparatorBenefit(
+                  icon: Icons.local_shipping_outlined,
+                  title: 'Envios confiables',
+                  body: 'Filtra por envio incluido y tiempos de entrega.',
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 30),
+          Text('Busquedas populares', style: _strongTextStyle(fontSize: 15)),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 12,
+            runSpacing: 10,
+            children: [
+              for (final label in const [
+                'audifonos',
+                'reloj inteligente',
+                'mochila',
+                'aspiradora',
+                'teclado mecanico',
+              ])
+                ActionChip(
+                  avatar: const Icon(Icons.search, size: 16),
+                  label: Text(label),
+                  onPressed: () {
+                    controller.text = label;
+                    onRun();
+                  },
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CyberSearchPanel extends StatelessWidget {
+  const _CyberSearchPanel({
+    required this.controller,
+    required this.onRun,
+    required this.isRunning,
+  });
+
+  final TextEditingController controller;
+  final VoidCallback onRun;
+  final bool isRunning;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(32),
+      decoration: _cyberPanelDecoration(glow: true),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const _CyberBadge(label: 'COMPARADOR DE PRECIO'),
+          const SizedBox(height: 34),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Encuentra el\nmejor precio',
+                  style: const TextStyle(
+                    color: _CyberColors.textPrimary,
+                    fontSize: 44,
+                    fontWeight: FontWeight.w900,
+                    height: 1.06,
+                  ),
+                ),
+              ),
+              const _StoreVsGraphic(compact: false),
+            ],
+          ),
           const SizedBox(height: 18),
           Text(
-            'ALIEXPRESS',
-            style: TextStyle(
-              color: _isNeoSkin
-                  ? _NeoColors.textPrimary
-                  : _CyberColors.textPrimary,
-              fontSize: 48,
-              fontWeight: FontWeight.w900,
-              height: 0.95,
-            ),
-          ),
-          Text(
-            'VS TEMU',
-            style: TextStyle(
-              color: _isNeoSkin ? _NeoColors.primary : _CyberColors.primary,
-              fontSize: 48,
-              fontWeight: FontWeight.w900,
-              height: 1.05,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text(
             'Busca el producto, aplica tus filtros y compara por precio total, reputacion y envio.',
-            style: TextStyle(
-              color: _isNeoSkin
-                  ? _NeoColors.textSecondary
-                  : _CyberColors.textSecondary,
-              height: 1.6,
-            ),
+            style: _supportTextStyle(fontSize: 16, height: 1.65),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 28),
           TextField(
             controller: controller,
             onSubmitted: (_) => onRun(),
-            style: TextStyle(
-              color: _isNeoSkin
-                  ? _NeoColors.textPrimary
-                  : _CyberColors.textPrimary,
-            ),
+            style: _inputTextStyle(),
             decoration: _inputDecoration(
               label: 'Nombre del producto',
               hint: 'Ej: audifonos bluetooth, teclado mecanico...',
               icon: Icons.search,
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 24),
           SizedBox(
-            height: 54,
+            height: 58,
             child: FilledButton.icon(
               style: FilledButton.styleFrom(
-                backgroundColor: _isNeoSkin
-                    ? _NeoColors.success
-                    : _CyberColors.primary,
-                foregroundColor: _isNeoSkin
-                    ? Colors.white
-                    : _CyberColors.bgDarker,
+                backgroundColor: _CyberColors.primary,
+                foregroundColor: _CyberColors.bgDarker,
+                padding: const EdgeInsets.symmetric(horizontal: 28),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(_isNeoSkin ? 12 : 8),
+                  borderRadius: BorderRadius.circular(10),
                 ),
               ),
               onPressed: isRunning ? null : onRun,
               icon: Icon(isRunning ? Icons.sync : Icons.compare_arrows),
               label: Text(isRunning ? 'Analizando ofertas' : 'Comparar ahora'),
             ),
+          ),
+          const SizedBox(height: 34),
+          Divider(color: _CyberColors.border.withValues(alpha: 0.8)),
+          const SizedBox(height: 28),
+          const Row(
+            children: [
+              Expanded(
+                child: _ComparatorBenefit(
+                  icon: Icons.sell_outlined,
+                  title: 'Compara precios',
+                  body: 'Encuentra la mejor opcion entre varias plataformas.',
+                ),
+              ),
+              Expanded(
+                child: _ComparatorBenefit(
+                  icon: Icons.verified_user_outlined,
+                  title: 'Compra seguro',
+                  body: 'Verifica reputacion y calificaciones de tiendas.',
+                ),
+              ),
+              Expanded(
+                child: _ComparatorBenefit(
+                  icon: Icons.local_shipping_outlined,
+                  title: 'Envios confiables',
+                  body: 'Filtra por envio incluido y tiempos de entrega.',
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StoreVsGraphic extends StatelessWidget {
+  const _StoreVsGraphic({required this.compact});
+
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = compact ? 150.0 : 230.0;
+    return SizedBox(
+      width: size,
+      height: size * 0.78,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Positioned.fill(
+            child: CustomPaint(
+              painter: _OrbitPainter(
+                color: _isNeoSkin
+                    ? _NeoColors.primary.withValues(alpha: 0.12)
+                    : _CyberColors.primary.withValues(alpha: 0.24),
+              ),
+            ),
+          ),
+          Positioned(
+            left: size * 0.18,
+            top: size * 0.18,
+            child: Transform.rotate(
+              angle: -0.18,
+              child: const _LargeStoreLogo(store: StoreOption.aliexpress),
+            ),
+          ),
+          Positioned(
+            right: size * 0.12,
+            top: size * 0.26,
+            child: Transform.rotate(
+              angle: 0.2,
+              child: const _LargeStoreLogo(store: StoreOption.temu),
+            ),
+          ),
+          Container(
+            width: compact ? 46 : 58,
+            height: compact ? 46 : 58,
+            decoration: BoxDecoration(
+              color: _isNeoSkin ? Colors.white : _CyberColors.bgDark,
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: _isNeoSkin
+                    ? _NeoColors.primary.withValues(alpha: 0.22)
+                    : _CyberColors.primary.withValues(alpha: 0.55),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color:
+                      (_isNeoSkin ? _NeoColors.primary : _CyberColors.primary)
+                          .withValues(alpha: 0.18),
+                  blurRadius: 20,
+                ),
+              ],
+            ),
+            child: Center(
+              child: Text(
+                'VS',
+                style: TextStyle(
+                  color: _isNeoSkin ? _NeoColors.primary : _CyberColors.primary,
+                  fontWeight: FontWeight.w900,
+                  fontSize: compact ? 16 : 22,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LargeStoreLogo extends StatelessWidget {
+  const _LargeStoreLogo({required this.store});
+
+  final StoreOption store;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 82,
+      height: 82,
+      decoration: BoxDecoration(
+        color: _storeLogoBackground(store),
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: _storeAccentColor(store).withValues(alpha: 0.35),
+            blurRadius: 18,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: CustomPaint(
+        painter: _StoreLogoPainter(store: store, selected: true),
+      ),
+    );
+  }
+}
+
+class _OrbitPainter extends CustomPainter {
+  const _OrbitPainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+    final center = Offset(size.width / 2, size.height / 2);
+    for (var i = 0; i < 3; i++) {
+      canvas.drawOval(
+        Rect.fromCenter(
+          center: center,
+          width: size.width * (0.52 + i * 0.14),
+          height: size.height * (0.44 + i * 0.12),
+        ),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _OrbitPainter oldDelegate) {
+    return oldDelegate.color != color;
+  }
+}
+
+class _ComparatorBenefit extends StatelessWidget {
+  const _ComparatorBenefit({
+    required this.icon,
+    required this.title,
+    required this.body,
+  });
+
+  final IconData icon;
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.primary;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Column(
+        children: [
+          Container(
+            width: 54,
+            height: 54,
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: _isNeoSkin ? 0.1 : 0.08),
+              shape: BoxShape.circle,
+              border: Border.all(color: accent.withValues(alpha: 0.45)),
+            ),
+            child: Icon(icon, color: accent),
+          ),
+          const SizedBox(height: 14),
+          Text(title, textAlign: TextAlign.center, style: _strongTextStyle()),
+          const SizedBox(height: 8),
+          Text(
+            body,
+            textAlign: TextAlign.center,
+            style: _supportTextStyle(fontSize: 13, height: 1.35),
           ),
         ],
       ),
@@ -3202,14 +3859,56 @@ class _CriteriaPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final textPrimary = _isNeoSkin
+        ? _NeoColors.textPrimary
+        : _CyberColors.textPrimary;
+    final textSecondary = _isNeoSkin
+        ? _NeoColors.textSecondary
+        : _CyberColors.textSecondary;
+    final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.primary;
     return Container(
-      padding: const EdgeInsets.all(22),
-      decoration: _cyberPanelDecoration(),
+      padding: const EdgeInsets.all(24),
+      decoration: _isNeoSkin
+          ? _applePanelDecoration()
+          : _cyberPanelDecoration(radius: 12, glow: true),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const _SectionTitle(number: '01', title: 'Filtros de busqueda'),
           const SizedBox(height: 18),
+          Text(
+            'Tiendas a comparar',
+            style: TextStyle(
+              color: textPrimary,
+              fontSize: 16,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Selecciona las plataformas que PriceSec debe abrir y comparar.',
+            style: TextStyle(color: textSecondary, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 14),
+          GridView.count(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            crossAxisCount: 2,
+            mainAxisSpacing: 10,
+            crossAxisSpacing: 10,
+            childAspectRatio: 2.65,
+            children: [
+              for (final store in StoreOption.values)
+                _StoreChoiceChip(
+                  store: store,
+                  selected: selectedStores.contains(store),
+                  onTap: () => onStoreToggled(store),
+                ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Divider(color: accent.withValues(alpha: 0.24)),
+          const SizedBox(height: 14),
           Wrap(
             spacing: 12,
             runSpacing: 12,
@@ -3250,27 +3949,35 @@ class _CriteriaPanel extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 18),
-          const Text(
-            'Tiendas a comparar',
-            style: TextStyle(
-              color: _CyberColors.textSecondary,
-              fontWeight: FontWeight.w800,
+          const SizedBox(height: 20),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: _isNeoSkin ? 0.08 : 0.06),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: accent.withValues(alpha: 0.22)),
             ),
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: StoreOption.values
-                .map(
-                  (store) => _StoreChoiceChip(
-                    store: store,
-                    selected: selectedStores.contains(store),
-                    onTap: () => onStoreToggled(store),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.lightbulb_outline, color: accent),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Consejo', style: _strongTextStyle()),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Usa los filtros para obtener resultados mas precisos y comparar solo lo que realmente te importa.',
+                        style: _supportTextStyle(height: 1.4),
+                      ),
+                    ],
                   ),
-                )
-                .toList(),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -3304,10 +4011,7 @@ class _ResultsPanel extends StatelessWidget {
           if (statusMessage == null)
             const _EmptyState()
           else ...[
-            Text(
-              statusMessage!,
-              style: const TextStyle(color: _CyberColors.textSecondary),
-            ),
+            Text(statusMessage!, style: _supportTextStyle()),
             if (bestResult != null) ...[
               const SizedBox(height: 16),
               _BestOptionCard(result: bestResult!, filters: filters),
@@ -3319,147 +4023,6 @@ class _ResultsPanel extends StatelessWidget {
               ),
             ],
           ],
-        ],
-      ),
-    );
-  }
-}
-
-class _MonitorVisual extends StatelessWidget {
-  const _MonitorVisual({required this.filters, required this.isRunning});
-
-  final SearchFilters filters;
-  final bool isRunning;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: _cyberPanelDecoration(radius: 12, glow: true),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              const _WindowDots(),
-              const SizedBox(width: 12),
-              Text(
-                isRunning ? 'LIVE SCAN' : 'SEARCH DASHBOARD',
-                style: TextStyle(
-                  color: _isNeoSkin
-                      ? _NeoColors.textPrimary
-                      : _CyberColors.textPrimary,
-                  fontWeight: FontWeight.w900,
-                  fontSize: 12,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          _DashboardMetric(
-            label: 'Country Route',
-            value: fixedMonitorConfig.country.toUpperCase(),
-            progress: 1,
-          ),
-          _DashboardMetric(
-            label: 'Currency Lock',
-            value: fixedMonitorConfig.currency,
-            progress: 1,
-          ),
-          _DashboardMetric(
-            label: 'Rating Gate',
-            value: '${_formatRating(filters.minRating)}+ STAR',
-            progress: filters.minRating / 5,
-          ),
-          _DashboardMetric(
-            label: 'Sales Signal',
-            value: '${filters.minSales}+',
-            progress: filters.minSales / 600,
-          ),
-          _DashboardMetric(
-            label: 'Shipping Filter',
-            value: filters.shippingFilter.statusLabel,
-            progress: filters.shippingFilter.progressValue,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _DashboardMetric extends StatelessWidget {
-  const _DashboardMetric({
-    required this.label,
-    required this.value,
-    required this.progress,
-  });
-
-  final String label;
-  final String value;
-  final double progress;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: _isNeoSkin
-            ? _NeoColors.bg
-            : _CyberColors.bgDarker.withValues(alpha: 0.7),
-        borderRadius: BorderRadius.circular(_isNeoSkin ? 12 : 8),
-        border: Border.all(
-          color: _isNeoSkin ? Colors.transparent : _CyberColors.border,
-        ),
-        boxShadow: _isNeoSkin
-            ? const [
-                BoxShadow(
-                  color: _NeoColors.shadowDark,
-                  blurRadius: 8,
-                  offset: Offset(4, 4),
-                ),
-                BoxShadow(
-                  color: _NeoColors.shadowLight,
-                  blurRadius: 8,
-                  offset: Offset(-4, -4),
-                ),
-              ]
-            : null,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              color: _isNeoSkin
-                  ? _NeoColors.textSecondary
-                  : _CyberColors.textSecondary,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            value,
-            style: TextStyle(
-              color: _isNeoSkin ? _NeoColors.primary : _CyberColors.primary,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(99),
-            child: LinearProgressIndicator(
-              value: progress.clamp(0, 1),
-              minHeight: 6,
-              backgroundColor: _isNeoSkin
-                  ? _NeoColors.lightEdge
-                  : _CyberColors.bgDark,
-              valueColor: AlwaysStoppedAnimation(
-                _isNeoSkin ? _NeoColors.primary : _CyberColors.secondary,
-              ),
-            ),
-          ),
         ],
       ),
     );
@@ -3479,34 +4042,301 @@ class _StoreChoiceChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.primary;
-    final background = _isNeoSkin
-        ? const Color(0xffedf1f7)
-        : _CyberColors.bgDarker.withValues(alpha: 0.5);
-    final textColor = selected && !_isNeoSkin
-        ? _CyberColors.bgDarker
-        : (_isNeoSkin ? _NeoColors.textPrimary : _CyberColors.textPrimary);
-    return FilterChip(
+    final textPrimary = _isNeoSkin
+        ? _NeoColors.textPrimary
+        : _CyberColors.textPrimary;
+    final textSecondary = _isNeoSkin
+        ? _NeoColors.textSecondary
+        : _CyberColors.textSecondary;
+    final accent = _isNeoSkin ? _NeoColors.primary : _storeAccentColor(store);
+    final bg = _isNeoSkin
+        ? (selected ? Colors.white : const Color(0xffedf2f7))
+        : (selected
+              ? accent.withValues(
+                  alpha: store == StoreOption.shein ? 0.1 : 0.16,
+                )
+              : _CyberColors.bgDarker.withValues(alpha: 0.76));
+    final border = selected
+        ? accent
+        : (_isNeoSkin
+              ? const Color(0xffcbd5e1)
+              : _CyberColors.border.withValues(alpha: 0.95));
+    return Semantics(
+      button: true,
       selected: selected,
-      showCheckmark: false,
-      avatar: Icon(
-        store.icon,
-        size: 18,
-        color: selected && !_isNeoSkin ? _CyberColors.bgDarker : accent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(_isNeoSkin ? 18 : 10),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(_isNeoSkin ? 18 : 10),
+            border: Border.all(color: border, width: selected ? 2 : 1.3),
+            boxShadow: _isNeoSkin
+                ? [
+                    BoxShadow(
+                      color: selected
+                          ? accent.withValues(alpha: 0.18)
+                          : _NeoColors.shadowDark.withValues(alpha: 0.65),
+                      blurRadius: selected ? 18 : 10,
+                      offset: const Offset(4, 4),
+                    ),
+                    const BoxShadow(
+                      color: _NeoColors.shadowLight,
+                      blurRadius: 10,
+                      offset: Offset(-4, -4),
+                    ),
+                  ]
+                : null,
+          ),
+          child: Row(
+            children: [
+              _StoreBrandIcon(store: store, selected: selected),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  store.label,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _isNeoSkin
+                        ? textPrimary
+                        : (selected ? accent : textPrimary),
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              Icon(
+                selected ? Icons.check_circle : Icons.radio_button_unchecked,
+                color: selected ? accent : textSecondary,
+                size: 19,
+              ),
+            ],
+          ),
+        ),
       ),
-      label: Text(store.label),
-      onSelected: (_) => onTap(),
-      selectedColor: accent.withValues(alpha: _isNeoSkin ? 0.18 : 1),
-      backgroundColor: background,
-      side: BorderSide(
-        color: selected
-            ? accent
-            : (_isNeoSkin ? _NeoColors.shadowDark : _CyberColors.border),
-        width: _isNeoSkin ? 1.4 : 1,
-      ),
-      labelStyle: TextStyle(color: textColor, fontWeight: FontWeight.w900),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
     );
+  }
+}
+
+class _StoreBrandIcon extends StatelessWidget {
+  const _StoreBrandIcon({required this.store, required this.selected});
+
+  final StoreOption store;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 38,
+      height: 38,
+      decoration: BoxDecoration(
+        color: _storeLogoBackground(store),
+        borderRadius: BorderRadius.circular(
+          store == StoreOption.amazon ? 8 : 12,
+        ),
+        border: Border.all(
+          color: _isNeoSkin
+              ? Colors.white.withValues(alpha: 0.8)
+              : Colors.white.withValues(alpha: 0.12),
+        ),
+      ),
+      child: CustomPaint(
+        painter: _StoreLogoPainter(store: store, selected: selected),
+      ),
+    );
+  }
+}
+
+Color _storeAccentColor(StoreOption store) {
+  if (!_isNeoSkin && store == StoreOption.shein) return const Color(0xfff8fafc);
+  if (!_isNeoSkin && store == StoreOption.amazon) {
+    return const Color(0xffffb454);
+  }
+  return store.brandColor;
+}
+
+Color _storeLogoBackground(StoreOption store) {
+  return switch (store) {
+    StoreOption.amazon => Colors.white,
+    StoreOption.shein => Colors.black,
+    StoreOption.temu => const Color(0xffff6a00),
+    StoreOption.aliexpress => const Color(0xffef2b00),
+  };
+}
+
+class _StoreLogoPainter extends CustomPainter {
+  const _StoreLogoPainter({required this.store, required this.selected});
+
+  final StoreOption store;
+  final bool selected;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    switch (store) {
+      case StoreOption.amazon:
+        _paintAmazon(canvas, size);
+      case StoreOption.shein:
+        _paintShein(canvas, size);
+      case StoreOption.temu:
+        _paintTemu(canvas, size);
+      case StoreOption.aliexpress:
+        _paintAliExpress(canvas, size);
+    }
+  }
+
+  void _paintAmazon(Canvas canvas, Size size) {
+    final text = TextPainter(
+      text: TextSpan(
+        text: 'a',
+        style: TextStyle(
+          color: Colors.black,
+          fontSize: size.height * 0.68,
+          fontWeight: FontWeight.w900,
+          height: 1,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    text.paint(canvas, Offset(size.width * 0.33, size.height * 0.02));
+    final smile = Paint()
+      ..color = const Color(0xffff9900)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.6
+      ..strokeCap = StrokeCap.round;
+    final rect = Rect.fromLTWH(
+      size.width * 0.18,
+      size.height * 0.52,
+      size.width * 0.62,
+      size.height * 0.28,
+    );
+    canvas.drawArc(rect, 0.18, 2.35, false, smile);
+    final arrow = Path()
+      ..moveTo(size.width * 0.79, size.height * 0.64)
+      ..lineTo(size.width * 0.86, size.height * 0.62)
+      ..lineTo(size.width * 0.83, size.height * 0.72);
+    canvas.drawPath(
+      arrow,
+      Paint()
+        ..color = const Color(0xffff9900)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round,
+    );
+  }
+
+  void _paintShein(Canvas canvas, Size size) {
+    final text = TextPainter(
+      text: TextSpan(
+        text: 'S',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: size.height * 0.72,
+          fontWeight: FontWeight.w900,
+          fontStyle: FontStyle.italic,
+          height: 1,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    text.paint(
+      canvas,
+      Offset((size.width - text.width) / 2, (size.height - text.height) / 2),
+    );
+  }
+
+  void _paintTemu(Canvas canvas, Size size) {
+    final box = RRect.fromRectAndRadius(
+      Rect.fromLTWH(
+        size.width * .16,
+        size.height * .13,
+        size.width * .68,
+        size.height * .64,
+      ),
+      Radius.circular(size.width * .16),
+    );
+    canvas.drawRRect(
+      box,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.4
+        ..color = Colors.white,
+    );
+    final text = TextPainter(
+      text: TextSpan(
+        text: 'TEMU',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: size.height * 0.21,
+          fontWeight: FontWeight.w900,
+          letterSpacing: 0,
+          height: 1,
+        ),
+      ),
+      textAlign: TextAlign.center,
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: size.width);
+    text.paint(
+      canvas,
+      Offset((size.width - text.width) / 2, size.height * .49),
+    );
+    final icons = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(Offset(size.width * .34, size.height * .34), 2.4, icons);
+    canvas.drawCircle(Offset(size.width * .50, size.height * .31), 2.2, icons);
+    canvas.drawCircle(Offset(size.width * .66, size.height * .34), 2.4, icons);
+  }
+
+  void _paintAliExpress(Canvas canvas, Size size) {
+    final top = Paint()..color = const Color(0xffffa000);
+    final bag = Paint()..color = const Color(0xffef2b00);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(0, 0, size.width, size.height),
+        Radius.circular(size.width * .23),
+      ),
+      top,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(0, size.height * .13, size.width, size.height * .87),
+        Radius.circular(size.width * .21),
+      ),
+      bag,
+    );
+    final handle = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.2
+      ..strokeCap = StrokeCap.round;
+    final rect = Rect.fromLTWH(
+      size.width * .26,
+      size.height * .20,
+      size.width * .48,
+      size.height * .34,
+    );
+    canvas.drawArc(rect, 0.05, math.pi - .1, false, handle);
+    final text = TextPainter(
+      text: TextSpan(
+        text: 'Ali',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: size.height * 0.23,
+          fontWeight: FontWeight.w900,
+          height: 1,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    text.paint(canvas, Offset(size.width * .24, size.height * .63));
+  }
+
+  @override
+  bool shouldRepaint(covariant _StoreLogoPainter oldDelegate) {
+    return oldDelegate.store != store || oldDelegate.selected != selected;
   }
 }
 
@@ -3582,7 +4412,7 @@ class _SectionTitle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final titleColor = _isNeoSkin
-        ? _NeoColors.textPrimary
+        ? const Color(0xff0f172a)
         : _CyberColors.textPrimary;
     final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.primary;
     final secondary = _isNeoSkin ? _NeoColors.success : _CyberColors.secondary;
@@ -3599,6 +4429,14 @@ class _SectionTitle extends StatelessWidget {
             color: titleColor,
             fontSize: 20,
             fontWeight: FontWeight.w900,
+            shadows: _isNeoSkin
+                ? null
+                : [
+                    Shadow(
+                      color: Colors.black.withValues(alpha: 0.5),
+                      blurRadius: 8,
+                    ),
+                  ],
           ),
         ),
         const SizedBox(width: 16),
@@ -3620,17 +4458,18 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.primary;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: _CyberColors.primary.withValues(alpha: 0.04),
+        color: accent.withValues(alpha: _isNeoSkin ? 0.06 : 0.04),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _CyberColors.primary.withValues(alpha: 0.22)),
+        border: Border.all(color: accent.withValues(alpha: 0.22)),
       ),
-      child: const Text(
+      child: Text(
         'Escribe un producto y presiona Comparar para iniciar la automatizacion.',
-        style: TextStyle(color: _CyberColors.textSecondary),
+        style: _supportTextStyle(),
       ),
     );
   }
@@ -3644,32 +4483,31 @@ class _BestOptionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.primary;
+    final secondary = _isNeoSkin ? _NeoColors.success : _CyberColors.secondary;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [
-            _CyberColors.primary.withValues(alpha: 0.16),
-            _CyberColors.secondary.withValues(alpha: 0.09),
+            accent.withValues(alpha: _isNeoSkin ? 0.1 : 0.16),
+            secondary.withValues(alpha: _isNeoSkin ? 0.07 : 0.09),
           ],
         ),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: _CyberColors.primary.withValues(alpha: 0.8)),
+        border: Border.all(color: accent.withValues(alpha: 0.8)),
         boxShadow: [
-          BoxShadow(
-            color: _CyberColors.primary.withValues(alpha: 0.2),
-            blurRadius: 24,
-          ),
+          BoxShadow(color: accent.withValues(alpha: 0.18), blurRadius: 24),
         ],
       ),
       child: Row(
         children: [
-          const Icon(Icons.verified, color: _CyberColors.primary),
+          Icon(Icons.verified, color: accent),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
               'Mejor opcion: ${result.store.label} por ${result.priceLabel}',
-              style: const TextStyle(fontWeight: FontWeight.w900),
+              style: _strongTextStyle(),
             ),
           ),
           const SizedBox(width: 12),
@@ -3677,8 +4515,8 @@ class _BestOptionCard extends StatelessWidget {
           const SizedBox(width: 12),
           OutlinedButton.icon(
             style: OutlinedButton.styleFrom(
-              foregroundColor: _CyberColors.primary,
-              side: const BorderSide(color: _CyberColors.primary),
+              foregroundColor: accent,
+              side: BorderSide(color: accent),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(8),
               ),
@@ -3702,7 +4540,9 @@ class _ResultRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final valid = result.isValid(filters);
-    final color = valid ? _CyberColors.primary : _CyberColors.accent;
+    final color = valid
+        ? (_isNeoSkin ? _NeoColors.primary : _CyberColors.primary)
+        : _CyberColors.accent;
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Material(
@@ -3713,7 +4553,9 @@ class _ResultRow extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: _CyberColors.card.withValues(alpha: 0.76),
+              color: _isNeoSkin
+                  ? const Color(0xfff8fafc)
+                  : _CyberColors.card.withValues(alpha: 0.76),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(
                 color: color.withValues(alpha: valid ? 0.28 : 0.45),
@@ -3732,26 +4574,17 @@ class _ResultRow extends StatelessWidget {
                           Flexible(
                             child: Text(
                               result.title,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w800,
-                              ),
+                              style: _strongTextStyle(),
                             ),
                           ),
                           const SizedBox(width: 8),
-                          const Icon(
-                            Icons.open_in_new,
-                            size: 15,
-                            color: _CyberColors.primary,
-                          ),
+                          Icon(Icons.open_in_new, size: 15, color: color),
                         ],
                       ),
                       const SizedBox(height: 4),
                       Text(
                         '${result.store.label} - ${result.ratingLabel} - ${result.salesLabel} - ${result.shippingIncluded ? 'envio incluido' : 'envio no incluido'} - ${result.deliveryLabel}',
-                        style: const TextStyle(
-                          color: _CyberColors.textSecondary,
-                          fontSize: 13,
-                        ),
+                        style: _supportTextStyle(fontSize: 13),
                       ),
                     ],
                   ),
@@ -3762,10 +4595,7 @@ class _ResultRow extends StatelessWidget {
                   children: [
                     Text(
                       result.priceLabel,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w900,
-                      ),
+                      style: _strongTextStyle(fontSize: 16),
                     ),
                     const SizedBox(height: 8),
                     OutlinedButton.icon(
@@ -3967,7 +4797,7 @@ class _PurchaseSectionState extends State<_PurchaseSection> {
       keyboardType: isText
           ? TextInputType.text
           : const TextInputType.numberWithOptions(decimal: true),
-      style: const TextStyle(color: _CyberColors.textPrimary),
+      style: _inputTextStyle(),
       decoration: _inputDecoration(
         label: label,
         hint: '',
@@ -4206,12 +5036,9 @@ class _MetricChip extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            label,
-            style: const TextStyle(color: _CyberColors.textSecondary),
-          ),
+          Text(label, style: _supportTextStyle()),
           const SizedBox(height: 4),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.w900)),
+          Text(value, style: _strongTextStyle()),
         ],
       ),
     );
@@ -4419,7 +5246,7 @@ class _AliExpressViabilitySectionState
       keyboardType: isText
           ? TextInputType.text
           : const TextInputType.numberWithOptions(decimal: true),
-      style: const TextStyle(color: _CyberColors.textPrimary),
+      style: _inputTextStyle(),
       decoration: _inputDecoration(
         label: label,
         hint: '',
@@ -4781,7 +5608,7 @@ class _InventorySectionState extends State<_InventorySection> {
       keyboardType: isText
           ? TextInputType.text
           : const TextInputType.numberWithOptions(decimal: true),
-      style: const TextStyle(color: _CyberColors.textPrimary),
+      style: _inputTextStyle(),
       decoration: _inputDecoration(
         label: label,
         hint: key == 'loadedAt' ? 'YYYY-MM-DD' : '',
@@ -4824,7 +5651,7 @@ class _InventorySectionState extends State<_InventorySection> {
               controller: textEditingController,
               focusNode: focusNode,
               onChanged: (value) => _controllers[key]!.text = value,
-              style: const TextStyle(color: _CyberColors.textPrimary),
+              style: _inputTextStyle(),
               decoration: _inputDecoration(
                 label: label,
                 hint: options.isEmpty
@@ -4852,10 +5679,7 @@ class _InventorySectionState extends State<_InventorySection> {
                   final option = visibleOptions.elementAt(index);
                   return ListTile(
                     dense: true,
-                    title: Text(
-                      option,
-                      style: const TextStyle(color: _CyberColors.textPrimary),
-                    ),
+                    title: Text(option, style: _inputTextStyle()),
                     onTap: () => onSelected(option),
                   );
                 },
@@ -5797,7 +6621,7 @@ class _SalesSectionState extends State<_SalesSection> {
       keyboardType: text
           ? TextInputType.text
           : const TextInputType.numberWithOptions(decimal: true),
-      style: const TextStyle(color: _CyberColors.textPrimary),
+      style: _inputTextStyle(),
       decoration: _inputDecoration(
         label: label,
         hint: text ? 'YYYY-MM-DD' : '',
@@ -5949,14 +6773,12 @@ class _ViabilitiesListState extends State<_ViabilitiesList> {
                       children: [
                         Text(
                           '#${_formatInputNumber(record.draft.number)} ${record.productName}',
-                          style: const TextStyle(fontWeight: FontWeight.w900),
+                          style: _strongTextStyle(),
                         ),
                         const SizedBox(height: 4),
                         Text(
                           'Unidad: ${formatCop(record.calculations.unitHomeCost.round())} | Libre comision: ${formatCop(record.calculations.commissionFreePrice.round())} | Viabilidad: ${record.calculations.viability.toStringAsFixed(2)}',
-                          style: const TextStyle(
-                            color: _CyberColors.textSecondary,
-                          ),
+                          style: _supportTextStyle(),
                         ),
                       ],
                     ),
@@ -6175,16 +6997,11 @@ class _PurchasesListState extends State<_PurchasesList> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          purchase.productName,
-                          style: const TextStyle(fontWeight: FontWeight.w900),
-                        ),
+                        Text(purchase.productName, style: _strongTextStyle()),
                         const SizedBox(height: 4),
                         Text(
                           'Unidad: ${formatCop(purchase.calculations.unitHomeCost.round())} | Comparacion: ${purchase.calculations.comparison.toStringAsFixed(2)}',
-                          style: const TextStyle(
-                            color: _CyberColors.textSecondary,
-                          ),
+                          style: _supportTextStyle(),
                         ),
                       ],
                     ),
@@ -6239,7 +7056,7 @@ class _ListSearchBox extends StatelessWidget {
       children: [
         TextField(
           controller: controller,
-          style: const TextStyle(color: _CyberColors.textPrimary),
+          style: _inputTextStyle(),
           decoration: _inputDecoration(
             label: label,
             hint: 'Ej: Zapato, perros, audifonos...',
@@ -6329,6 +7146,10 @@ class _LockedCriterion extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.secondary;
+    final textSecondary = _isNeoSkin
+        ? _NeoColors.textSecondary
+        : _CyberColors.textSecondary;
     return Container(
       constraints: const BoxConstraints(minWidth: 190),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
@@ -6336,15 +7157,15 @@ class _LockedCriterion extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 18, color: _CyberColors.secondary),
+          Icon(icon, size: 18, color: accent),
           const SizedBox(width: 9),
           Text(
             '$label: ',
-            style: const TextStyle(color: _CyberColors.textSecondary),
+            style: TextStyle(color: textSecondary, fontWeight: FontWeight.w700),
           ),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.w900)),
+          Text(value, style: _strongTextStyle()),
           const SizedBox(width: 8),
-          const Icon(Icons.lock, size: 15, color: _CyberColors.textSecondary),
+          Icon(Icons.lock, size: 15, color: textSecondary),
         ],
       ),
     );
@@ -6370,34 +7191,57 @@ class _DropdownCriterion<T> extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.secondary;
+    final textPrimary = _isNeoSkin
+        ? _NeoColors.textPrimary
+        : _CyberColors.textPrimary;
+    final textSecondary = _isNeoSkin
+        ? _NeoColors.textSecondary
+        : _CyberColors.textSecondary;
     return Container(
-      constraints: const BoxConstraints(minWidth: 230),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+      constraints: const BoxConstraints(minWidth: 230, maxWidth: 310),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: _fieldDecoration(),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 18, color: _CyberColors.secondary),
-          const SizedBox(width: 9),
-          Text(
-            '$label: ',
-            style: const TextStyle(color: _CyberColors.textSecondary),
+          Row(
+            children: [
+              Icon(icon, size: 18, color: accent),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Text(
+                  '$label: ',
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: textSecondary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 4),
+          const SizedBox(height: 4),
           DropdownButtonHideUnderline(
             child: DropdownButton<T>(
               value: value,
-              dropdownColor: _CyberColors.card,
-              iconEnabledColor: _CyberColors.primary,
-              style: const TextStyle(
-                color: _CyberColors.textPrimary,
-                fontWeight: FontWeight.w900,
-              ),
+              isExpanded: true,
+              dropdownColor: _isNeoSkin
+                  ? const Color(0xfff8fafc)
+                  : _CyberColors.card,
+              iconEnabledColor: _isNeoSkin
+                  ? _NeoColors.primary
+                  : _CyberColors.primary,
+              style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900),
               items: options
                   .map(
                     (option) => DropdownMenuItem<T>(
                       value: option,
-                      child: Text(format(option)),
+                      child: Text(
+                        format(option),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   )
                   .toList(),
@@ -6406,27 +7250,6 @@ class _DropdownCriterion<T> extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _WindowDots extends StatelessWidget {
-  const _WindowDots();
-
-  @override
-  Widget build(BuildContext context) {
-    const colors = [Color(0xffff4757), Color(0xffffd43b), Color(0xff51cf66)];
-    return Row(
-      children: colors
-          .map(
-            (color) => Container(
-              width: 10,
-              height: 10,
-              margin: const EdgeInsets.only(right: 6),
-              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-            ),
-          )
-          .toList(),
     );
   }
 }
@@ -7234,6 +8057,7 @@ class ProductResult {
     required this.shippingIncluded,
     required this.deliveryDays,
     required this.listingUrl,
+    this.shippingKnown = true,
   });
 
   final StoreOption store;
@@ -7242,6 +8066,7 @@ class ProductResult {
   final double rating;
   final int sales;
   final bool shippingIncluded;
+  final bool shippingKnown;
   final int deliveryDays;
   final String listingUrl;
 
@@ -7259,24 +8084,29 @@ class ProductResult {
       rating: (json['rating'] as num? ?? 0).toDouble(),
       sales: (json['sales'] as num? ?? 0).round(),
       shippingIncluded: json['shippingIncluded'] == true,
+      shippingKnown: json['shippingKnown'] == true,
       deliveryDays: (json['deliveryDays'] as num? ?? 0).round(),
       listingUrl: json['listingUrl'] as String? ?? '',
     );
   }
 
   bool isValid(SearchFilters filters) {
+    final shippingOk =
+        !shippingKnown || filters.shippingFilter.accepts(shippingIncluded);
     return listingUrl.isNotEmpty &&
         (rating == 0 || rating >= filters.minRating) &&
         (sales == 0 || sales >= filters.minSales) &&
         filters.stores.contains(store) &&
-        filters.shippingFilter.accepts(shippingIncluded);
+        shippingOk;
   }
 
   double score(SearchFilters filters) {
     final priceScore = totalPrice <= 0 ? 1 : 1000000 / totalPrice;
     final ratingScore = rating == 0 ? 20 : rating * 12;
-    final salesScore = sales == 0 ? 8 : sales.clamp(0, 2000) / 80;
-    final shippingScore = filters.shippingFilter.score(shippingIncluded);
+    final salesScore = sales == 0 ? 8.0 : sales.clamp(0, 2000).toDouble() / 80;
+    final shippingScore = shippingKnown
+        ? filters.shippingFilter.score(shippingIncluded)
+        : 4;
     return priceScore + ratingScore + salesScore + shippingScore;
   }
 
@@ -7376,18 +8206,19 @@ BoxDecoration _cyberPanelDecoration({double radius = 12, bool glow = false}) {
 BoxDecoration _fieldDecoration() {
   if (_isNeoSkin) {
     return BoxDecoration(
-      color: _NeoColors.bg,
+      color: const Color(0xfff8fafc),
       borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: const Color(0xffcbd5e1), width: 1.1),
       boxShadow: const [
         BoxShadow(
           color: _NeoColors.shadowDark,
-          blurRadius: 8,
-          offset: Offset(4, 4),
+          blurRadius: 10,
+          offset: Offset(3, 3),
         ),
         BoxShadow(
           color: _NeoColors.shadowLight,
-          blurRadius: 8,
-          offset: Offset(-4, -4),
+          blurRadius: 10,
+          offset: Offset(-3, -3),
         ),
       ],
     );
@@ -7536,6 +8367,30 @@ String? _passwordValidationError(String password, {bool allowEmpty = false}) {
   return null;
 }
 
+TextStyle _inputTextStyle() {
+  return TextStyle(
+    color: _isNeoSkin ? _NeoColors.textPrimary : _CyberColors.textPrimary,
+    fontWeight: _isNeoSkin ? FontWeight.w800 : FontWeight.w500,
+  );
+}
+
+TextStyle _strongTextStyle({double? fontSize}) {
+  return TextStyle(
+    color: _isNeoSkin ? _NeoColors.textPrimary : _CyberColors.textPrimary,
+    fontSize: fontSize,
+    fontWeight: FontWeight.w900,
+  );
+}
+
+TextStyle _supportTextStyle({double? fontSize, double? height}) {
+  return TextStyle(
+    color: _isNeoSkin ? _NeoColors.textSecondary : _CyberColors.textSecondary,
+    fontSize: fontSize,
+    height: height,
+    fontWeight: _isNeoSkin ? FontWeight.w700 : FontWeight.w500,
+  );
+}
+
 InputDecoration _inputDecoration({
   required String label,
   required String hint,
@@ -7545,8 +8400,8 @@ InputDecoration _inputDecoration({
 }) {
   if (_isNeoSkin) {
     final border = OutlineInputBorder(
-      borderRadius: BorderRadius.circular(12),
-      borderSide: BorderSide.none,
+      borderRadius: BorderRadius.circular(14),
+      borderSide: const BorderSide(color: Color(0xffcbd5e1), width: 1.2),
     );
     return InputDecoration(
       labelText: label,
@@ -7555,16 +8410,28 @@ InputDecoration _inputDecoration({
       suffixIcon: suffixIcon,
       errorText: errorText,
       errorStyle: const TextStyle(color: _CyberColors.accent),
-      labelStyle: const TextStyle(color: _NeoColors.textSecondary),
-      hintStyle: const TextStyle(color: _NeoColors.textSecondary),
+      labelStyle: const TextStyle(
+        color: _NeoColors.textSecondary,
+        fontWeight: FontWeight.w800,
+      ),
+      floatingLabelStyle: const TextStyle(
+        color: _NeoColors.primary,
+        fontWeight: FontWeight.w900,
+      ),
+      hintStyle: const TextStyle(
+        color: Color(0xff94a3b8),
+        fontWeight: FontWeight.w600,
+      ),
       filled: true,
-      fillColor: _NeoColors.bg,
+      fillColor: const Color(0xfff8fafc),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
       border: border,
       enabledBorder: border,
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
         borderSide: const BorderSide(color: _NeoColors.primary, width: 2),
       ),
+      disabledBorder: border,
     );
   }
   return InputDecoration(
