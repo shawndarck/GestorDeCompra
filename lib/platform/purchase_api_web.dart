@@ -6,7 +6,10 @@ import 'dart:html' as html;
 
 import '../main.dart';
 
-const _baseUrl = 'http://127.0.0.1:8768';
+final _baseUrl = const String.fromEnvironment(
+  'PRICESEC_API_BASE_URL',
+  defaultValue: 'http://127.0.0.1:8768',
+).replaceFirst(RegExp(r'/$'), '');
 const _requestTimeout = Duration(seconds: 12);
 const _localStorageKey = 'pricesec_purchases_backup';
 const _viabilityLocalStorageKey = 'pricesec_aliexpress_viability_backup';

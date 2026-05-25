@@ -11,11 +11,41 @@ PriceSec es una app Flutter Web local para:
 - Registrar analisis de viabilidad AliExpress desde una seccion independiente.
 - Registrar inventario por producto y bodega.
 - Registrar ventas descontando inventario automaticamente.
+- Usar un asistente virtual local, sin IA paga, para guiar ventas, stock,
+  navegacion y cambio de contrasena desde un chat flotante.
 - Buscar y paginar registros guardados para evitar listas infinitas.
 - Proteger la app con login, registro inicial de super admin y recuperacion de contraseña.
 - Consultar automaticamente la TRM USD -> COP desde una API gratuita.
 - Cambiar entre dos visuales: `Vista Cyber` y `Vista Neo`.
 - Navegar desde el modulo `Sistema de Gestion`, organizado por categorias.
+
+## Asistente Virtual Local
+
+PriceSec incluye un asistente flotante llamado `Asistente virtual`. Funciona
+con reglas internas, por lo que no necesita conectarse a OpenAI, ChatGPT ni a
+ningun servicio pago de IA.
+
+Puede ayudar con:
+
+- Registrar ventas paso a paso.
+- Consultar inventario o stock por producto.
+- Abrir modulos como comparador, inventario, ventas o tiendas.
+- Cambiar la contrasena del usuario logueado.
+- Guiar al usuario con respuestas didacticas dentro del sistema.
+
+Ejemplos de mensajes:
+
+```text
+registrar venta
+vender zapatos
+cuantos zapatos tengo
+abrir inventario
+cambiar contrasena
+```
+
+Cuando el asistente registra una venta, usa el mismo flujo seguro del modulo
+`Registrar ventas`: valida producto, cantidad disponible, precio y confirma
+antes de descontar inventario.
 
 El proyecto corre localmente. No es una app desplegada en internet.
 
@@ -122,6 +152,73 @@ flutter run -d web-server --web-port 5036
 
 ```text
 http://localhost:5036
+```
+
+## Despliegue En Netlify
+
+Netlify sirve muy bien el frontend Flutter Web de PriceSec, pero no reemplaza el
+backend local completo. El backend usa Node.js, SQLite, sesiones persistentes de
+Chrome y automatizacion de busqueda, por lo que debe estar en un servidor aparte
+como Render, Railway, Fly.io o un VPS. Netlify solo debe publicar la carpeta
+`build/web`.
+
+El frontend ya lee la URL del backend desde esta variable:
+
+```text
+PRICESEC_API_BASE_URL
+```
+
+Para desplegar en Netlify:
+
+1. Sube el repo a GitHub.
+
+2. En Netlify, crea un sitio nuevo desde ese repo.
+
+3. Usa esta configuracion, ya incluida en `netlify.toml`:
+
+```toml
+[build]
+  command = "git clone https://github.com/flutter/flutter.git -b stable --depth 1 $HOME/flutter && export PATH=\"$HOME/flutter/bin:$PATH\" && flutter config --enable-web && flutter pub get && flutter build web --release --dart-define=PRICESEC_API_BASE_URL=${PRICESEC_API_BASE_URL:-http://127.0.0.1:8768}"
+  publish = "build/web"
+```
+
+4. En Netlify, entra a:
+
+```text
+Site configuration -> Environment variables
+```
+
+5. Crea la variable:
+
+```text
+PRICESEC_API_BASE_URL=https://tu-backend-publico.com
+```
+
+6. Lanza el deploy.
+
+Si no configuras `PRICESEC_API_BASE_URL`, la app quedara intentando comunicarse
+con `http://127.0.0.1:8768`, que solo funciona en tu propio PC. En internet eso
+no sirve para otros usuarios.
+
+Para probar un build local apuntando a un backend publico:
+
+```powershell
+flutter build web --release --dart-define=PRICESEC_API_BASE_URL=https://tu-backend-publico.com
+```
+
+Para probar un build local con el backend de tu PC:
+
+```powershell
+flutter build web --release --dart-define=PRICESEC_API_BASE_URL=http://127.0.0.1:8768
+```
+
+Resumen recomendado:
+
+```text
+Frontend: Netlify
+Backend: VPS/Render/Railway/Fly.io
+Base de datos: SQLite en VPS o PostgreSQL si se migra a nube
+Chrome automatizado: VPS o servidor con navegador disponible
 ```
 
 ## Verificar Que Todo Esta Vivo
@@ -352,7 +449,14 @@ El archivo `scripts\pricesec.env.ps1` esta ignorado por Git y no debe subirse al
 
 ## Registrar Compra
 
-La pestana `Registrar compra` guarda compras/importaciones segun el primer Excel:
+La pestana `Registrar compra` ahora tiene dos modos internos:
+
+- `Registrar compra`: usa los calculos de viabilidad, pero al guardar envia el
+  producto directamente a `Inventario general` con estado `En transito`.
+- `Registrar compra por Barco`: muestra el formulario de importacion completo.
+
+El modo `Registrar compra por Barco` guarda compras/importaciones segun el
+primer Excel:
 
 ```text
 Alibaba por barco FN.xlsx

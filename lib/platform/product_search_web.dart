@@ -6,6 +6,11 @@ import 'dart:html' as html;
 
 import '../main.dart';
 
+final _baseUrl = const String.fromEnvironment(
+  'PRICESEC_API_BASE_URL',
+  defaultValue: 'http://127.0.0.1:8768',
+).replaceFirst(RegExp(r'/$'), '');
+
 class ProductSearchException implements Exception {
   const ProductSearchException(this.message);
 
@@ -31,7 +36,7 @@ Future<List<ProductResult>> searchProducts({
     },
   });
   final request = await _searchRequest(
-    'http://127.0.0.1:8768/search',
+    '$_baseUrl/search',
     payload,
   );
 

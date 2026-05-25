@@ -1,0 +1,11 @@
+[build]
+  command = "git clone https://github.com/flutter/flutter.git -b stable --depth 1 $HOME/flutter && export PATH=\"$HOME/flutter/bin:$PATH\" && flutter config --enable-web && flutter pub get && flutter build web --release --dart-define=PRICESEC_API_BASE_URL=${PRICESEC_API_BASE_URL:-http://127.0.0.1:8768}"
+  publish = "build/web"
+
+[build.environment]
+  FLUTTER_WEB_AUTO_DETECT = "true"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

@@ -486,14 +486,20 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
                           filters: _filters,
                         ),
                       ] else if (_activeTab == 1)
-                        _PurchaseSection(
+                        _PurchaseHubSection(
                           purchases: _purchases,
+                          viabilityRecords: _viabilityRecords,
+                          inventoryItems: _inventoryItems,
                           message: _purchaseMessage,
+                          viabilityMessage: _viabilityMessage,
                           editingId: _editingPurchaseId,
+                          editingViabilityId: _editingViabilityId,
                           initialTrm: _currentTrm,
                           trmRevision: _trmRevision,
                           onSave: _savePurchase,
+                          onSaveViability: _savePurchaseViabilityToInventory,
                           onCancelEdit: _cancelEditPurchase,
+                          onCancelViabilityEdit: _cancelEditViability,
                         )
                       else if (_activeTab == 2)
                         _SavedPurchasesSection(
@@ -564,6 +570,17 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
                 ),
               ),
             ),
+          ),
+          _VirtualAssistant(
+            session: _authSession!,
+            activeTab: _activeTab,
+            visualSkin: _visualSkin,
+            inventoryItems: _inventoryItems,
+            sales: _sales,
+            onNavigate: _changeTab,
+            onToggleSkin: _toggleVisualSkin,
+            onSaveSale: _saveSale,
+            onProfileUpdated: _handleProfileUpdated,
           ),
         ],
       ),
@@ -871,6 +888,43 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
     }
   }
 
+  Future<bool> _savePurchaseViabilityToInventory(
+    AliExpressViabilityDraft draft,
+  ) async {
+    try {
+      final calculations = AliExpressViabilityCalculations.fromDraft(draft);
+      if (calculations.viability < 2) {
+        throw Exception(
+          'No se puede registrar la compra: el puntaje de viabilidad es menor a 2.',
+        );
+      }
+      await saveInventoryItem(
+        InventoryItemDraft(
+          productName: draft.productName,
+          unitPurchaseValue: calculations.unitHomeCost,
+          quantity: draft.quantity,
+          publicSaleValue: draft.mercadoLibreTotalPrice,
+          loadedAt: DateTime.now().toIso8601String().split('T').first,
+          warehouse: 'En transito',
+          status: 'in_transit',
+        ),
+      );
+      final items = await loadInventoryItems();
+      if (!mounted) return false;
+      setState(() {
+        _inventoryItems = items;
+        _purchaseMessage =
+            'Compra registrada y enviada al inventario en transito.';
+        _activeTab = 10;
+      });
+      return true;
+    } catch (error) {
+      if (!mounted) return false;
+      setState(() => _purchaseMessage = _cleanError(error));
+      return false;
+    }
+  }
+
   Future<bool> _saveInventoryItem(InventoryItemDraft draft) async {
     try {
       await saveInventoryItem(draft);
@@ -1133,6 +1187,1047 @@ class _PriceMonitorPageState extends State<PriceMonitorPage> {
   }
 }
 
+enum _AssistantFlow { idle, saleProduct, saleQuantity, salePrice, saleConfirm, password }
+
+class _AssistantMessage {
+  const _AssistantMessage({required this.text, required this.fromUser});
+
+  final String text;
+  final bool fromUser;
+}
+
+class _VirtualAssistant extends StatefulWidget {
+  const _VirtualAssistant({
+    required this.session,
+    required this.activeTab,
+    required this.visualSkin,
+    required this.inventoryItems,
+    required this.sales,
+    required this.onNavigate,
+    required this.onToggleSkin,
+    required this.onSaveSale,
+    required this.onProfileUpdated,
+  });
+
+  final AuthSession session;
+  final int activeTab;
+  final _VisualSkin visualSkin;
+  final List<InventoryItemRecord> inventoryItems;
+  final List<SaleRecord> sales;
+  final ValueChanged<int> onNavigate;
+  final VoidCallback onToggleSkin;
+  final Future<bool> Function(SaleDraft draft) onSaveSale;
+  final ValueChanged<AuthSession> onProfileUpdated;
+
+  @override
+  State<_VirtualAssistant> createState() => _VirtualAssistantState();
+}
+
+class _VirtualAssistantState extends State<_VirtualAssistant>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulseController;
+  final _inputController = TextEditingController();
+  final _scrollController = ScrollController();
+  final _inputFocusNode = FocusNode();
+  final List<_AssistantMessage> _messages = [];
+  _AssistantFlow _flow = _AssistantFlow.idle;
+  bool _open = false;
+  bool _busy = false;
+  InventoryItemRecord? _pendingSaleItem;
+  List<InventoryItemRecord> _saleCandidates = const [];
+  double? _pendingQuantity;
+  double? _pendingPrice;
+  Offset? _anchor;
+  bool _dragging = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1900),
+    )..repeat(reverse: true);
+    _bot(
+      'Hola $_displayName. Soy tu asistente virtual de PriceSec. Puedo ayudarte a registrar ventas, consultar stock, abrir modulos y cambiar tu contrasena.',
+    );
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    _inputController.dispose();
+    _inputFocusNode.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  String get _displayName {
+    final profile = widget.session.user.profileName.trim();
+    return profile.isEmpty ? widget.session.user.username : profile;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isNeo = _isNeoSkin;
+    final screen = MediaQuery.sizeOf(context);
+    const buttonSize = 76.0;
+    const margin = 18.0;
+    final fallback = Offset(
+      screen.width - buttonSize - 22,
+      screen.height - buttonSize - 22,
+    );
+    final safeAnchor = _clampAssistantAnchor(
+      _anchor ?? fallback,
+      screen,
+      buttonSize,
+      margin,
+    );
+    if (_anchor == null || safeAnchor != _anchor) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _anchor = safeAnchor);
+      });
+    }
+    return Positioned(
+      left: safeAnchor.dx,
+      top: safeAnchor.dy,
+      child: Material(
+        color: Colors.transparent,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            if (_open) ...[
+              Transform.translate(
+                offset: _panelOffset(safeAnchor, screen, buttonSize),
+                child: AnimatedScale(
+                  scale: 1,
+                  duration: const Duration(milliseconds: 180),
+                  child: _assistantPanel(isNeo),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+            _assistantButton(isNeo),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Offset _clampAssistantAnchor(
+    Offset value,
+    Size screen,
+    double buttonSize,
+    double margin,
+  ) {
+    final maxX = math.max(margin, screen.width - buttonSize - margin);
+    final maxY = math.max(margin, screen.height - buttonSize - margin);
+    return Offset(
+      value.dx.clamp(margin, maxX),
+      value.dy.clamp(margin, maxY),
+    );
+  }
+
+  Offset _panelOffset(Offset anchor, Size screen, double buttonSize) {
+    final panelWidth = math.min(390.0, screen.width - 32);
+    final panelHeight = math.min(560.0, screen.height - 150);
+    var dx = 0.0;
+    var dy = -panelHeight - 12;
+    if (anchor.dx + panelWidth > screen.width - 16) {
+      dx = screen.width - 16 - panelWidth - anchor.dx;
+    }
+    if (anchor.dy + dy < 16) {
+      dy = buttonSize + 12;
+    }
+    return Offset(dx, dy);
+  }
+
+  Widget _assistantButton(bool isNeo) {
+    return AnimatedBuilder(
+      animation: _pulseController,
+      builder: (context, _) {
+        final glow = 0.35 + (_pulseController.value * 0.35);
+        return Tooltip(
+          message: 'Asistente virtual',
+          child: GestureDetector(
+            onPanStart: (_) => _dragging = false,
+            onPanUpdate: (details) {
+              _dragging = true;
+              final screen = MediaQuery.sizeOf(context);
+              setState(() {
+                _anchor = _clampAssistantAnchor(
+                  (_anchor ?? Offset.zero) + details.delta,
+                  screen,
+                  76,
+                  18,
+                );
+              });
+            },
+            onPanEnd: (_) {
+              Future<void>.delayed(const Duration(milliseconds: 60), () {
+                _dragging = false;
+              });
+            },
+            onTap: () {
+              if (_dragging) return;
+              setState(() => _open = !_open);
+              if (!_open) return;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) _inputFocusNode.requestFocus();
+              });
+            },
+            child: Container(
+              width: 76,
+              height: 76,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: const LinearGradient(
+                  colors: [Color(0xff00d4ff), Color(0xff6366f1), Color(0xff8b5cf6)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: (isNeo ? _NeoColors.primary : _CyberColors.secondary)
+                        .withValues(alpha: glow),
+                    blurRadius: 28,
+                    spreadRadius: 4,
+                  ),
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: isNeo ? 0.18 : 0.45),
+                    blurRadius: 18,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
+              ),
+              child: CustomPaint(
+                painter: _AssistantBotPainter(
+                  t: _pulseController.value,
+                  compact: true,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _assistantPanel(bool isNeo) {
+    final width = MediaQuery.sizeOf(context).width;
+    final panelWidth = math.min(390.0, width - 32);
+    final textColor = isNeo ? _NeoColors.textPrimary : _CyberColors.textPrimary;
+    final muted = isNeo ? _NeoColors.textSecondary : _CyberColors.textSecondary;
+    return Container(
+      width: panelWidth,
+      height: math.min(560, MediaQuery.sizeOf(context).height - 150),
+      decoration: isNeo ? _appleFloatingDecoration() : _assistantCyberDecoration(),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 12, 10),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 44,
+                  height: 44,
+                  child: AnimatedBuilder(
+                    animation: _pulseController,
+                    builder: (context, _) => CustomPaint(
+                      painter: _AssistantBotPainter(t: _pulseController.value),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Asistente virtual', style: _strongTextStyle(fontSize: 16)),
+                      Text(
+                        _busy ? 'Procesando accion...' : 'Gratis, local y guiado',
+                        style: _supportTextStyle(fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Cerrar',
+                  onPressed: () => setState(() => _open = false),
+                  icon: Icon(Icons.close, color: muted),
+                ),
+              ],
+            ),
+          ),
+          Divider(height: 1, color: muted.withValues(alpha: 0.18)),
+          _quickActions(textColor),
+          Expanded(
+            child: ListView.builder(
+              controller: _scrollController,
+              padding: const EdgeInsets.all(14),
+              itemCount: _messages.length,
+              itemBuilder: (context, index) {
+                final message = _messages[index];
+                return Align(
+                  alignment: message.fromUser
+                      ? Alignment.centerRight
+                      : Alignment.centerLeft,
+                  child: Container(
+                    constraints: BoxConstraints(maxWidth: panelWidth * 0.78),
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 13,
+                      vertical: 11,
+                    ),
+                    decoration: BoxDecoration(
+                      color: message.fromUser
+                          ? (_isNeoSkin
+                                ? _NeoColors.primary
+                                : _CyberColors.primary)
+                          : (_isNeoSkin
+                                ? Colors.white
+                                : _CyberColors.bgDarker.withValues(alpha: 0.72)),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: message.fromUser
+                            ? Colors.transparent
+                            : (_isNeoSkin
+                                  ? const Color(0xffdbe4ef)
+                                  : _CyberColors.primary.withValues(alpha: 0.22)),
+                      ),
+                    ),
+                    child: Text(
+                      message.text,
+                      style: TextStyle(
+                        color: message.fromUser
+                            ? (_isNeoSkin ? Colors.white : Colors.black)
+                            : textColor,
+                        fontWeight: message.fromUser
+                            ? FontWeight.w800
+                            : FontWeight.w700,
+                        height: 1.32,
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _inputController,
+                    focusNode: _inputFocusNode,
+                    enabled: !_busy,
+                    style: _inputTextStyle(),
+                    onSubmitted: (_) => _submit(),
+                    decoration: _inputDecoration(
+                      label: 'Escribe aqui',
+                      hint: 'Ej: vender zapatos, stock, cambiar contrasena',
+                      icon: Icons.chat_bubble_outline,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                FilledButton(
+                  onPressed: _busy ? null : _submit,
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(52, 52),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  child: Icon(_busy ? Icons.sync : Icons.send),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _quickActions(Color textColor) {
+    final actions = [
+      ('Registrar venta', 'venta'),
+      ('Consultar stock', 'stock'),
+      ('Abrir inventario', 'inventario'),
+      ('Cambiar contrasena', 'cambiar contrasena'),
+    ];
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 4),
+      child: Row(
+        children: [
+          for (final action in actions) ...[
+            ActionChip(
+              label: Text(action.$1),
+              avatar: Icon(_assistantActionIcon(action.$2), size: 16),
+              onPressed: _busy ? null : () => _handleText(action.$2),
+              labelStyle: TextStyle(
+                color: textColor,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
+        ],
+      ),
+    );
+  }
+
+  IconData _assistantActionIcon(String action) {
+    if (action.contains('venta')) return Icons.point_of_sale;
+    if (action.contains('stock') || action.contains('inventario')) {
+      return Icons.inventory_2;
+    }
+    return Icons.lock_reset;
+  }
+
+  void _submit() {
+    final text = _inputController.text.trim();
+    if (text.isEmpty) return;
+    _inputController.clear();
+    _handleText(text);
+  }
+
+  Future<void> _handleText(String text) async {
+    _user(text);
+    final normalized = _normalizeSearchText(text);
+    if (_flow != _AssistantFlow.idle) {
+      if (_shouldInterruptFlow(normalized)) {
+        _resetFlow();
+        await _handleInterruptedIntent(text, normalized);
+        return;
+      }
+      await _continueFlow(text, normalized);
+      return;
+    }
+    if (_handleSkinCommand(normalized)) return;
+    if (_containsAny(normalized, ['venta', 'vender', 'vendio', 'registrar venta'])) {
+      _startSaleFlow();
+      return;
+    }
+    final saleIntent = _saleMatches(text);
+    if (saleIntent.isNotEmpty && widget.activeTab == 6) {
+      _startSaleFlow(initialProduct: text, matches: saleIntent);
+      return;
+    }
+    if (_containsAny(normalized, [
+      'stock',
+      'stoc',
+      'inventario',
+      'consultar',
+      'conrultar',
+      'cuantos',
+      'cuantas',
+      'tengo',
+      'existencias',
+    ])) {
+      _answerStock(text);
+      return;
+    }
+    if (_containsAny(normalized, ['contrasena', 'password', 'clave'])) {
+      _flow = _AssistantFlow.password;
+      _bot(
+        'Claro. Escribe la nueva contrasena. Debe tener minimo 8 caracteres, letras, numeros y un caracter especial.',
+      );
+      return;
+    }
+    if (_tryNavigate(normalized)) return;
+    if (saleIntent.isNotEmpty) {
+      _suggestSaleFromMatches(text, saleIntent);
+      return;
+    }
+    _bot(
+      'Puedo ayudarte con ventas, stock, modulos, vista Neo/Cyber o contrasena. Si escribes un producto como "carro", tambien busco coincidencias para vender.',
+    );
+  }
+
+  bool _shouldInterruptFlow(String normalized) {
+    if (_flow == _AssistantFlow.password) return false;
+    return _containsAny(normalized, [
+      'stock',
+      'stoc',
+      'inventario',
+      'consultar',
+      'conrultar',
+      'cuantos',
+      'cuantas',
+      'tengo',
+      'hay',
+      'neo',
+      'cyber',
+      'vista',
+      'comparador',
+      'compra',
+      'cancelar',
+      'cancela',
+    ]);
+  }
+
+  Future<void> _handleInterruptedIntent(String text, String normalized) async {
+    if (_containsAny(normalized, ['cancelar', 'cancela'])) {
+      _bot('Listo, cancele el flujo actual. Que hacemos ahora?');
+      return;
+    }
+    if (_handleSkinCommand(normalized)) return;
+    if (_containsAny(normalized, [
+      'stock',
+      'stoc',
+      'inventario',
+      'consultar',
+      'conrultar',
+      'cuantos',
+      'cuantas',
+      'tengo',
+      'hay',
+    ])) {
+      _answerStock(text);
+      return;
+    }
+    if (_tryNavigate(normalized)) return;
+    _bot('Entendido, sali del flujo anterior. Puedes pedirme stock, venta, vista neo/cyber o abrir un modulo.');
+  }
+
+  Future<void> _continueFlow(String text, String normalized) async {
+    switch (_flow) {
+      case _AssistantFlow.saleProduct:
+        _selectSaleProduct(text, normalized);
+      case _AssistantFlow.saleQuantity:
+        final quantity = parseLocalizedNumber(text);
+        final item = _pendingSaleItem;
+        if (quantity <= 0 || item == null) {
+          _bot('La cantidad debe ser mayor a cero. Intentalo otra vez.');
+          return;
+        }
+        if (quantity > item.quantity) {
+          _bot(
+            'Solo hay ${_formatInputNumber(item.quantity)} unidades en ${item.warehouse}. Escribe una cantidad menor.',
+          );
+          return;
+        }
+        _pendingQuantity = quantity;
+        _flow = _AssistantFlow.salePrice;
+        _bot(
+          'Perfecto. Precio unitario de venta? Sugerido: ${formatCop(item.publicSaleValue.round())}. Puedes escribir "sugerido".',
+        );
+      case _AssistantFlow.salePrice:
+        final item = _pendingSaleItem;
+        if (item == null) {
+          _resetFlow();
+          return;
+        }
+        final price = normalized.contains('sugerido') || normalized == 'si'
+            ? item.publicSaleValue
+            : parseLocalizedNumber(text);
+        if (price <= 0) {
+          _bot('El precio debe ser mayor a cero. Escribe el valor unitario.');
+          return;
+        }
+        _pendingPrice = price;
+        _flow = _AssistantFlow.saleConfirm;
+        _bot(
+          'Voy a registrar la venta de ${_formatInputNumber(_pendingQuantity ?? 0)} und de "${item.productName}" por ${formatCop(price.round())} cada una, desde ${item.warehouse}. Confirmas? responde si o no.',
+        );
+      case _AssistantFlow.saleConfirm:
+        if (_isYes(normalized)) {
+          await _confirmSale();
+        } else if (_isNo(normalized)) {
+          _bot('Listo, cancele el registro de la venta.');
+          _resetFlow();
+        } else {
+          _bot('Necesito que confirmes con "si" o canceles con "no".');
+        }
+      case _AssistantFlow.password:
+        await _changePassword(text);
+      case _AssistantFlow.idle:
+        return;
+    }
+  }
+
+  void _startSaleFlow({
+    String? initialProduct,
+    List<InventoryItemRecord>? matches,
+  }) {
+    if (!widget.session.user.can('view_sales')) {
+      _bot('Tu usuario no tiene permiso para registrar ventas.');
+      return;
+    }
+    final available = widget.inventoryItems.where((item) => item.quantity > 0);
+    if (available.isEmpty) {
+      _bot('No encuentro productos disponibles para vender. Primero registra inventario.');
+      return;
+    }
+    widget.onNavigate(6);
+    _flow = _AssistantFlow.saleProduct;
+    if (initialProduct != null) {
+      _selectSaleProduct(initialProduct, _normalizeSearchText(initialProduct), precomputed: matches);
+      return;
+    }
+    _bot('Vamos a registrar una venta. Que producto vendiste?');
+  }
+
+  void _selectSaleProduct(
+    String text,
+    String normalized, {
+    List<InventoryItemRecord>? precomputed,
+  }) {
+    final selectedByNumber = int.tryParse(normalized);
+    if (selectedByNumber != null &&
+        selectedByNumber >= 1 &&
+        selectedByNumber <= _saleCandidates.length) {
+      _chooseSaleItem(_saleCandidates[selectedByNumber - 1]);
+      return;
+    }
+    if (_isYes(normalized) && _saleCandidates.length == 1) {
+      _chooseSaleItem(_saleCandidates.first);
+      return;
+    }
+    final matches = precomputed ?? widget.inventoryItems
+        .where((item) => item.quantity > 0)
+        .where((item) => _assistantItemMatches(text, item))
+        .toList();
+    if (matches.isEmpty) {
+      _bot('No encontre ese producto con stock disponible. Prueba con otra palabra del nombre.');
+      return;
+    }
+    if (matches.length == 1) {
+      _chooseSaleItem(matches.first);
+      return;
+    }
+    _saleCandidates = matches.take(5).toList();
+    _bot(
+      'Encontre varias opciones. Responde con el numero:\n${[
+        for (var i = 0; i < _saleCandidates.length; i++)
+          '${i + 1}. ${_saleCandidates[i].productName} | ${_saleCandidates[i].warehouse} | ${_formatInputNumber(_saleCandidates[i].quantity)} und'
+      ].join('\n')}',
+    );
+  }
+
+  List<InventoryItemRecord> _saleMatches(String text) {
+    final matches = widget.inventoryItems
+        .where((item) => item.quantity > 0)
+        .where((item) => _assistantItemMatches(text, item))
+        .toList();
+    matches.sort((a, b) => _assistantItemScore(text, b).compareTo(_assistantItemScore(text, a)));
+    return matches;
+  }
+
+  bool _assistantItemMatches(String text, InventoryItemRecord item) {
+    if (_smartMatches(text, [item.productName, item.warehouse])) return true;
+    if (_looseTokenMatch(text, [item.productName, item.warehouse])) return true;
+    final queryTokens = _assistantSearchTokens(text);
+    if (queryTokens.isEmpty) return false;
+    final haystack = _normalizeSearchText('${item.productName} ${item.warehouse}');
+    final hayTokens = haystack.split(' ').where((token) => token.length >= 3);
+    return queryTokens.any((query) {
+      return hayTokens.any(
+        (token) =>
+            token.contains(query) ||
+            query.contains(token) ||
+            _singularToken(token).contains(_singularToken(query)) ||
+            _singularToken(query).contains(_singularToken(token)),
+      );
+    });
+  }
+
+  int _assistantItemScore(String text, InventoryItemRecord item) {
+    final queryTokens = _assistantSearchTokens(text);
+    final name = _normalizeSearchText(item.productName);
+    var score = 0;
+    for (final token in queryTokens) {
+      if (name.contains(token)) score += 10;
+      if (name.split(' ').contains(token)) score += 8;
+      if (name.contains(_singularToken(token))) score += 6;
+    }
+    return score;
+  }
+
+  List<String> _assistantSearchTokens(String text) {
+    const ignored = {
+      'quiero',
+      'vender',
+      'venta',
+      'registrar',
+      'vendio',
+      'vendi',
+      'producto',
+      'stock',
+      'cuantos',
+      'cuantas',
+      'tengo',
+      'hay',
+      'de',
+      'el',
+      'la',
+      'los',
+      'las',
+      'un',
+      'una',
+      'por',
+      'favor',
+    };
+    return _normalizeSearchText(text)
+        .split(' ')
+        .where((token) => token.length >= 3 && !ignored.contains(token))
+        .map(_singularToken)
+        .toList();
+  }
+
+  String _singularToken(String token) {
+    return _looseSingularToken(token);
+  }
+
+  void _suggestSaleFromMatches(String text, List<InventoryItemRecord> matches) {
+    widget.onNavigate(6);
+    _flow = _AssistantFlow.saleProduct;
+    if (matches.length == 1) {
+      final item = matches.first;
+      _bot(
+        'Encontre "${item.productName}" con ${_formatInputNumber(item.quantity)} und en ${item.warehouse}. Quieres registrar una venta de este producto? Responde si para continuar o escribe otro producto.',
+      );
+      _saleCandidates = [item];
+      return;
+    }
+    _saleCandidates = matches.take(5).toList();
+    _bot(
+      'Con "$text" encontre productos para vender. Responde con el numero:\n${[
+        for (var i = 0; i < _saleCandidates.length; i++)
+          '${i + 1}. ${_saleCandidates[i].productName} | ${_saleCandidates[i].warehouse} | ${_formatInputNumber(_saleCandidates[i].quantity)} und'
+      ].join('\n')}',
+    );
+  }
+
+  void _chooseSaleItem(InventoryItemRecord item) {
+    _pendingSaleItem = item;
+    _flow = _AssistantFlow.saleQuantity;
+    _bot(
+      'Producto seleccionado: ${item.productName}. Hay ${_formatInputNumber(item.quantity)} und en ${item.warehouse}. Cuantas unidades vendiste?',
+    );
+  }
+
+  Future<void> _confirmSale() async {
+    final item = _pendingSaleItem;
+    final quantity = _pendingQuantity;
+    final price = _pendingPrice;
+    if (item == null || quantity == null || price == null) {
+      _bot('Me falto un dato. Empecemos de nuevo con "registrar venta".');
+      _resetFlow();
+      return;
+    }
+    setState(() => _busy = true);
+    final saved = await widget.onSaveSale(
+      SaleDraft(
+        inventoryItemId: item.id,
+        soldAt: DateTime.now().toIso8601String().split('T').first,
+        quantity: quantity,
+        unitSaleValue: price,
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _busy = false);
+    _bot(
+      saved
+          ? 'Venta registrada. Desconte el inventario y actualice el historial.'
+          : 'No pude registrar la venta. Revisa el mensaje del modulo de ventas.',
+    );
+    _resetFlow();
+  }
+
+  void _answerStock(String rawText) {
+    final query = _stockQuery(rawText);
+    final items = widget.inventoryItems
+        .where((item) => query.isEmpty || _assistantItemMatches(query, item))
+        .toList();
+    if (items.isEmpty) {
+      _bot('No encontre inventario relacionado con "$query".');
+      return;
+    }
+    final grouped = <String, double>{};
+    final warehouses = <String, Set<String>>{};
+    for (final item in items) {
+      grouped[item.productName] = (grouped[item.productName] ?? 0) + item.quantity;
+      warehouses.putIfAbsent(item.productName, () => {}).add(item.warehouse);
+    }
+    final rows = grouped.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    _bot(
+      'Inventario encontrado:\n${rows.take(8).map((entry) {
+        final places = warehouses[entry.key]!.take(3).join(', ');
+        return '- ${entry.key}: ${_formatInputNumber(entry.value)} und ($places)';
+      }).join('\n')}',
+    );
+  }
+
+  String _stockQuery(String rawText) {
+    var text = _normalizeSearchText(rawText);
+    for (final word in [
+      'cuantos',
+      'cuantas',
+      'tengo',
+      'hay',
+      'stock',
+      'stoc',
+      'inventario',
+      'consultar',
+      'conrultar',
+      'existencias',
+      'de',
+      'en',
+      'unidades',
+    ]) {
+      text = text.replaceAll(RegExp('\\b$word\\b'), ' ');
+    }
+    return text.replaceAll(RegExp(r'\s+'), ' ').trim();
+  }
+
+  Future<void> _changePassword(String password) async {
+    final error = _passwordValidationError(password);
+    if (error != null) {
+      _bot(error);
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final user = widget.session.user;
+      final session = await updateAuthProfile(
+        profileName: user.profileName.isEmpty ? user.username : user.profileName,
+        password: password,
+        avatarData: user.avatarData,
+      );
+      widget.onProfileUpdated(session);
+      _bot('Contrasena actualizada correctamente.');
+    } catch (error) {
+      _bot(error.toString().replaceFirst(RegExp(r'^Exception:\s*'), ''));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+      _resetFlow();
+    }
+  }
+
+  bool _tryNavigate(String normalized) {
+    final target = _navigationTarget(normalized);
+    if (target == null) return false;
+    widget.onNavigate(target.index);
+    _bot('Listo. Te lleve a ${target.label}.');
+    return true;
+  }
+
+  bool _handleSkinCommand(String normalized) {
+    final wantsNeo = normalized.contains('neo') ||
+        normalized.contains('blanca') ||
+        normalized.contains('clara') ||
+        normalized.contains('neumorf');
+    final wantsCyber = normalized.contains('cyber') ||
+        normalized.contains('oscura') ||
+        normalized.contains('dark');
+    if (!wantsNeo && !wantsCyber) return false;
+    final target = wantsNeo ? _VisualSkin.neumorphic : _VisualSkin.cyber;
+    if (widget.visualSkin != target) {
+      widget.onToggleSkin();
+    }
+    _bot(
+      target == _VisualSkin.neumorphic
+          ? 'Listo. Cambie la interfaz a Vista Neo.'
+          : 'Listo. Cambie la interfaz a Vista Cyber.',
+    );
+    return true;
+  }
+
+  _ModuleOption? _navigationTarget(String normalized) {
+    final matches = {
+      0: ['comparador', 'precio', 'buscar'],
+      1: ['registrar compra', 'compra'],
+      2: ['compras guardadas'],
+      3: ['viabilidad'],
+      4: ['viabilidades guardadas'],
+      5: ['sistema', 'gestion', 'registrar inventario'],
+      6: ['ventas', 'registrar ventas'],
+      10: ['inventario general', 'stock'],
+      8: ['colaboradores'],
+      9: ['tiendas', 'mercado libre'],
+    };
+    for (final entry in matches.entries) {
+      if (entry.value.any(normalized.contains)) {
+        return _moduleOptions.firstWhere((option) => option.index == entry.key);
+      }
+    }
+    return null;
+  }
+
+  void _resetFlow() {
+    _flow = _AssistantFlow.idle;
+    _pendingSaleItem = null;
+    _saleCandidates = const [];
+    _pendingQuantity = null;
+    _pendingPrice = null;
+  }
+
+  bool _containsAny(String value, List<String> tokens) {
+    return tokens.any(value.contains);
+  }
+
+  bool _isYes(String value) => ['si', 's', 'confirmo', 'ok', 'dale'].contains(value);
+
+  bool _isNo(String value) => ['no', 'cancelar', 'cancela'].contains(value);
+
+  void _user(String text) {
+    setState(() => _messages.add(_AssistantMessage(text: text, fromUser: true)));
+    _scrollLater();
+  }
+
+  void _bot(String text) {
+    setState(() => _messages.add(_AssistantMessage(text: text, fromUser: false)));
+    _scrollLater();
+  }
+
+  void _scrollLater() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _open && !_busy) {
+        _inputFocusNode.requestFocus();
+      }
+      if (!_scrollController.hasClients) return;
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+}
+
+class _AssistantBotPainter extends CustomPainter {
+  const _AssistantBotPainter({required this.t, this.compact = false});
+
+  final double t;
+  final bool compact;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+    final bob = math.sin(t * math.pi * 2) * h * 0.025;
+    final bodyRect = Rect.fromLTWH(w * 0.12, h * 0.2 + bob, w * 0.76, h * 0.58);
+    final body = RRect.fromRectAndRadius(bodyRect, Radius.circular(w * 0.22));
+    final stroke = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = compact ? 4 : 3
+      ..shader = const LinearGradient(
+        colors: [Color(0xff18d7ff), Color(0xff2563eb), Color(0xff8b5cf6)],
+      ).createShader(bodyRect);
+    final fill = Paint()..color = Colors.white;
+    final faceRect = Rect.fromLTWH(w * 0.24, h * 0.32 + bob, w * 0.52, h * 0.28);
+    final face = RRect.fromRectAndRadius(faceRect, Radius.circular(w * 0.12));
+    canvas.drawRRect(body, fill);
+    canvas.drawRRect(body, stroke);
+    canvas.drawRRect(face, Paint()..color = const Color(0xff061a57));
+    final earPaint = Paint()
+      ..shader = const LinearGradient(
+        colors: [Color(0xff22d3ee), Color(0xff2563eb)],
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+      ).createShader(bodyRect);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(w * 0.04, h * 0.38 + bob, w * 0.12, h * 0.2),
+        Radius.circular(w * 0.06),
+      ),
+      earPaint,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(w * 0.84, h * 0.38 + bob, w * 0.12, h * 0.2),
+        Radius.circular(w * 0.06),
+      ),
+      earPaint,
+    );
+    final antennaPaint = Paint()
+      ..color = const Color(0xff1554b7)
+      ..strokeWidth = compact ? 4 : 3
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(
+      Offset(w * 0.5, h * 0.2 + bob),
+      Offset(w * 0.5, h * 0.08 + bob),
+      antennaPaint,
+    );
+    canvas.drawCircle(
+      Offset(w * 0.5, h * 0.07 + bob),
+      w * 0.075,
+      Paint()..color = const Color(0xff12c8ff),
+    );
+    canvas.drawCircle(
+      Offset(w * 0.47, h * 0.045 + bob),
+      w * 0.02,
+      Paint()..color = Colors.white.withValues(alpha: 0.7),
+    );
+    final eyePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = compact ? 4 : 3
+      ..color = const Color(0xff22f4ff);
+    canvas.drawCircle(Offset(w * 0.38, h * 0.45 + bob), w * 0.055, eyePaint);
+    canvas.drawCircle(Offset(w * 0.62, h * 0.45 + bob), w * 0.055, eyePaint);
+    canvas.drawCircle(
+      Offset(w * 0.36, h * 0.43 + bob),
+      w * 0.025,
+      Paint()..color = Colors.white,
+    );
+    canvas.drawCircle(
+      Offset(w * 0.60, h * 0.43 + bob),
+      w * 0.025,
+      Paint()..color = Colors.white,
+    );
+    final smile = Path()
+      ..moveTo(w * 0.44, h * 0.53 + bob)
+      ..quadraticBezierTo(w * 0.5, h * 0.6 + bob, w * 0.56, h * 0.53 + bob);
+    canvas.drawPath(
+      smile,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = compact ? 4 : 3
+        ..strokeCap = StrokeCap.round
+        ..color = const Color(0xff22f4ff),
+    );
+    final sparkle = Paint()..color = const Color(0xffffc107).withValues(alpha: 0.9);
+    final s = w * (0.055 + 0.014 * math.sin(t * math.pi * 2));
+    final c = Offset(w * 0.82, h * 0.18 + bob);
+    final path = Path()
+      ..moveTo(c.dx, c.dy - s)
+      ..quadraticBezierTo(c.dx + s * 0.25, c.dy - s * 0.25, c.dx + s, c.dy)
+      ..quadraticBezierTo(c.dx + s * 0.25, c.dy + s * 0.25, c.dx, c.dy + s)
+      ..quadraticBezierTo(c.dx - s * 0.25, c.dy + s * 0.25, c.dx - s, c.dy)
+      ..quadraticBezierTo(c.dx - s * 0.25, c.dy - s * 0.25, c.dx, c.dy - s);
+    canvas.drawPath(path, sparkle);
+  }
+
+  @override
+  bool shouldRepaint(covariant _AssistantBotPainter oldDelegate) {
+    return oldDelegate.t != t || oldDelegate.compact != compact;
+  }
+}
+
+BoxDecoration _assistantCyberDecoration() {
+  return BoxDecoration(
+    color: const Color(0xff07101f).withValues(alpha: 0.96),
+    borderRadius: BorderRadius.circular(22),
+    border: Border.all(color: _CyberColors.secondary.withValues(alpha: 0.35)),
+    boxShadow: [
+      BoxShadow(
+        color: _CyberColors.secondary.withValues(alpha: 0.16),
+        blurRadius: 28,
+      ),
+      BoxShadow(
+        color: Colors.black.withValues(alpha: 0.55),
+        blurRadius: 30,
+        offset: const Offset(0, 20),
+      ),
+    ],
+  );
+}
+
 class _HeaderBar extends StatelessWidget {
   const _HeaderBar({
     required this.onRun,
@@ -1245,6 +2340,28 @@ class _HeaderBar extends StatelessWidget {
                 label: Text(isRunning ? 'Ejecutando' : 'Ejecutar'),
               ),
               OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _isNeoSkin
+                      ? const Color(0xff166534)
+                      : _CyberColors.primary,
+                  backgroundColor: _isNeoSkin
+                      ? const Color(0xffdcfce7)
+                      : _CyberColors.primary.withValues(alpha: 0.08),
+                  side: BorderSide(
+                    color: _isNeoSkin
+                        ? const Color(0xff22c55e)
+                        : _CyberColors.primary.withValues(alpha: 0.75),
+                    width: 1.4,
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 16,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(_isNeoSkin ? 12 : 8),
+                  ),
+                  textStyle: const TextStyle(fontWeight: FontWeight.w900),
+                ),
                 onPressed: onLogout,
                 icon: const Icon(Icons.logout),
                 label: const Text('Salir'),
@@ -2387,7 +3504,7 @@ class _ModuleSelectorState extends State<_ModuleSelector> {
   }
 
   List<_ModuleOption> _primaryOptions(List<_ModuleOption> options) {
-    const primary = [0, 10, 5, 6, 1, 2];
+    const primary = [0, 10, 5, 6, 1, 2, 3, 4, 9, 8, 7];
     return [
       for (final index in primary)
         for (final option in options)
@@ -2450,7 +3567,7 @@ class _MegaMenuGrid extends StatelessWidget {
             crossAxisCount: columns,
             mainAxisSpacing: 16,
             crossAxisSpacing: 16,
-            childAspectRatio: constraints.maxWidth < 720 ? 1.25 : 1.46,
+            childAspectRatio: constraints.maxWidth < 720 ? 0.95 : 1.08,
             children: [
               for (final category in visibleCategories)
                 _MegaMenuCategory(
@@ -2711,20 +3828,30 @@ class _OwnershipFooter extends StatelessWidget {
   Widget build(BuildContext context) {
     final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.primary;
     final textColor = _isNeoSkin
-        ? _NeoColors.textSecondary
+        ? const Color(0xff0f172a)
         : _CyberColors.textSecondary;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
       decoration: BoxDecoration(
         color: _isNeoSkin
-            ? Colors.white.withValues(alpha: 0.68)
+            ? Colors.white
             : _CyberColors.bgDarker.withValues(alpha: 0.42),
         borderRadius: BorderRadius.circular(_isNeoSkin ? 18 : 12),
         border: Border.all(
           color: _isNeoSkin
-              ? const Color(0xffe2e8f0)
+              ? const Color(0xff475569)
               : _CyberColors.border.withValues(alpha: 0.7),
+          width: _isNeoSkin ? 1.6 : 1.2,
         ),
+        boxShadow: _isNeoSkin
+            ? [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.07),
+                  blurRadius: 18,
+                  offset: const Offset(0, 10),
+                ),
+              ]
+            : null,
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -2737,7 +3864,8 @@ class _OwnershipFooter extends StatelessWidget {
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: textColor,
-                fontWeight: FontWeight.w800,
+                fontWeight: FontWeight.w900,
+                fontSize: 13.5,
                 letterSpacing: 0,
               ),
             ),
@@ -4411,16 +5539,18 @@ class _SectionTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final titleColor = _isNeoSkin
-        ? const Color(0xff0f172a)
-        : _CyberColors.textPrimary;
+    final titleColor = _isNeoSkin ? Colors.black : _CyberColors.textPrimary;
     final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.primary;
     final secondary = _isNeoSkin ? _NeoColors.success : _CyberColors.secondary;
     return Row(
       children: [
         Text(
           number,
-          style: TextStyle(color: accent, fontWeight: FontWeight.w900),
+          style: TextStyle(
+            color: accent,
+            fontWeight: FontWeight.w900,
+            fontSize: 14,
+          ),
         ),
         const SizedBox(width: 14),
         Text(
@@ -4429,8 +5559,14 @@ class _SectionTitle extends StatelessWidget {
             color: titleColor,
             fontSize: 20,
             fontWeight: FontWeight.w900,
+            letterSpacing: 0,
             shadows: _isNeoSkin
-                ? null
+                ? [
+                    Shadow(
+                      color: Colors.white.withValues(alpha: 0.9),
+                      blurRadius: 2,
+                    ),
+                  ]
                 : [
                     Shadow(
                       color: Colors.black.withValues(alpha: 0.5),
@@ -4463,13 +5599,24 @@ class _EmptyState extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: accent.withValues(alpha: _isNeoSkin ? 0.06 : 0.04),
+        color: _isNeoSkin
+            ? Colors.white.withValues(alpha: 0.76)
+            : accent.withValues(alpha: 0.04),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: accent.withValues(alpha: 0.22)),
+        border: Border.all(
+          color: _isNeoSkin
+              ? const Color(0xff94a3b8)
+              : accent.withValues(alpha: 0.22),
+        ),
       ),
       child: Text(
         'Escribe un producto y presiona Comparar para iniciar la automatizacion.',
-        style: _supportTextStyle(),
+        style: TextStyle(
+          color: _isNeoSkin
+              ? const Color(0xff334155)
+              : _CyberColors.textSecondary,
+          fontWeight: FontWeight.w800,
+        ),
       ),
     );
   }
@@ -4625,6 +5772,157 @@ class _ResultRow extends StatelessWidget {
   }
 }
 
+enum _PurchaseMode {
+  viability('Registrar compra', Icons.fact_check),
+  boat('Registrar compra por Barco', Icons.directions_boat);
+
+  const _PurchaseMode(this.label, this.icon);
+
+  final String label;
+  final IconData icon;
+}
+
+class _PurchaseHubSection extends StatefulWidget {
+  const _PurchaseHubSection({
+    required this.purchases,
+    required this.viabilityRecords,
+    required this.inventoryItems,
+    required this.message,
+    required this.viabilityMessage,
+    required this.editingId,
+    required this.editingViabilityId,
+    required this.initialTrm,
+    required this.trmRevision,
+    required this.onSave,
+    required this.onSaveViability,
+    required this.onCancelEdit,
+    required this.onCancelViabilityEdit,
+  });
+
+  final List<PurchaseRecord> purchases;
+  final List<AliExpressViabilityRecord> viabilityRecords;
+  final List<InventoryItemRecord> inventoryItems;
+  final String? message;
+  final String? viabilityMessage;
+  final int? editingId;
+  final int? editingViabilityId;
+  final double? initialTrm;
+  final int trmRevision;
+  final Future<bool> Function(PurchaseDraft draft) onSave;
+  final Future<bool> Function(AliExpressViabilityDraft draft) onSaveViability;
+  final VoidCallback onCancelEdit;
+  final VoidCallback onCancelViabilityEdit;
+
+  @override
+  State<_PurchaseHubSection> createState() => _PurchaseHubSectionState();
+}
+
+class _PurchaseHubSectionState extends State<_PurchaseHubSection> {
+  _PurchaseMode _mode = _PurchaseMode.viability;
+
+  @override
+  void didUpdateWidget(covariant _PurchaseHubSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.editingId != widget.editingId && widget.editingId != null) {
+      _mode = _PurchaseMode.boat;
+    }
+    if (oldWidget.editingViabilityId != widget.editingViabilityId &&
+        widget.editingViabilityId != null) {
+      _mode = _PurchaseMode.viability;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.primary;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(18),
+          decoration: _isNeoSkin
+              ? _applePanelDecoration()
+              : _cyberPanelDecoration(radius: 12, glow: true),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const _SectionTitle(number: '03', title: 'Registrar compra'),
+              const SizedBox(height: 14),
+              Text(
+                'Registra una compra directa al inventario en transito, o usa compra por barco para el calculo completo de importacion.',
+                style: _supportTextStyle(height: 1.45),
+              ),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  for (final mode in _PurchaseMode.values)
+                    ChoiceChip(
+                      selected: _mode == mode,
+                      avatar: Icon(
+                        mode.icon,
+                        size: 18,
+                        color: _mode == mode
+                            ? (_isNeoSkin
+                                  ? Colors.white
+                                  : _CyberColors.bgDarker)
+                            : accent,
+                      ),
+                      label: Text(mode.label),
+                      labelStyle: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        color: _mode == mode
+                            ? (_isNeoSkin
+                                  ? Colors.white
+                                  : _CyberColors.bgDarker)
+                            : (_isNeoSkin
+                                  ? _NeoColors.textPrimary
+                                  : _CyberColors.textPrimary),
+                      ),
+                      selectedColor: accent,
+                      backgroundColor: _isNeoSkin
+                          ? const Color(0xfff8fafc)
+                          : _CyberColors.bgDarker,
+                      side: BorderSide(color: accent.withValues(alpha: 0.45)),
+                      onSelected: (_) => setState(() => _mode = mode),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        if (_mode == _PurchaseMode.viability)
+          _AliExpressViabilitySection(
+            records: widget.viabilityRecords,
+            inventoryItems: widget.inventoryItems,
+            message: widget.viabilityMessage,
+            editingId: widget.editingViabilityId,
+            onSave: widget.onSaveViability,
+            onCancelEdit: widget.onCancelViabilityEdit,
+            titleNumber: '03A',
+            title: 'Registrar compra',
+            description:
+                'Este formulario calcula la compra y la envia directamente al inventario en estado En transito.',
+          )
+        else
+          _PurchaseSection(
+            purchases: widget.purchases,
+            message: widget.message,
+            editingId: widget.editingId,
+            initialTrm: widget.initialTrm,
+            trmRevision: widget.trmRevision,
+            onSave: widget.onSave,
+            onCancelEdit: widget.onCancelEdit,
+            titleNumber: '03B',
+            title: 'Registrar compra por Barco',
+          ),
+      ],
+    );
+  }
+}
+
 class _PurchaseSection extends StatefulWidget {
   const _PurchaseSection({
     required this.purchases,
@@ -4634,6 +5932,8 @@ class _PurchaseSection extends StatefulWidget {
     required this.trmRevision,
     required this.onSave,
     required this.onCancelEdit,
+    this.titleNumber = '03',
+    this.title = 'Registrar compra',
   });
 
   final List<PurchaseRecord> purchases;
@@ -4643,6 +5943,8 @@ class _PurchaseSection extends StatefulWidget {
   final int trmRevision;
   final Future<bool> Function(PurchaseDraft draft) onSave;
   final VoidCallback onCancelEdit;
+  final String titleNumber;
+  final String title;
 
   @override
   State<_PurchaseSection> createState() => _PurchaseSectionState();
@@ -4711,7 +6013,7 @@ class _PurchaseSectionState extends State<_PurchaseSection> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const _SectionTitle(number: '03', title: 'Registrar compra'),
+          _SectionTitle(number: widget.titleNumber, title: widget.title),
           const SizedBox(height: 18),
           LayoutBuilder(
             builder: (context, constraints) {
@@ -5086,17 +6388,26 @@ class _SavedPurchasesSection extends StatelessWidget {
 class _AliExpressViabilitySection extends StatefulWidget {
   const _AliExpressViabilitySection({
     required this.records,
+    this.inventoryItems = const [],
     required this.message,
     required this.editingId,
     required this.onSave,
     required this.onCancelEdit,
+    this.titleNumber = '05',
+    this.title = 'Viabilidad AliExpress',
+    this.description =
+        'Formulario independiente basado en los encabezados y formulas del Excel, sin cargar sus filas de ejemplo.',
   });
 
   final List<AliExpressViabilityRecord> records;
+  final List<InventoryItemRecord> inventoryItems;
   final String? message;
   final int? editingId;
   final Future<bool> Function(AliExpressViabilityDraft draft) onSave;
   final VoidCallback onCancelEdit;
+  final String titleNumber;
+  final String title;
+  final String description;
 
   @override
   State<_AliExpressViabilitySection> createState() =>
@@ -5108,6 +6419,7 @@ class _AliExpressViabilitySectionState
   final _controllers = <String, TextEditingController>{};
   final _errors = <String, String>{};
   bool _isSaving = false;
+  double _localNumberSeed = 0;
 
   AliExpressViabilityRecord? get _editingRecord {
     final id = widget.editingId;
@@ -5131,6 +6443,10 @@ class _AliExpressViabilitySectionState
   @override
   void didUpdateWidget(covariant _AliExpressViabilitySection oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.inventoryItems.length != widget.inventoryItems.length &&
+        widget.editingId == null) {
+      _controllers['number']?.text = _formatInputNumber(_nextViabilityNumber());
+    }
     if (oldWidget.editingId != widget.editingId) {
       final record = _editingRecord;
       if (record == null) {
@@ -5159,12 +6475,9 @@ class _AliExpressViabilitySectionState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const _SectionTitle(number: '05', title: 'Viabilidad AliExpress'),
+          _SectionTitle(number: widget.titleNumber, title: widget.title),
           const SizedBox(height: 8),
-          const Text(
-            'Formulario independiente basado en los encabezados y formulas del Excel, sin cargar sus filas de ejemplo.',
-            style: TextStyle(color: _CyberColors.textSecondary, height: 1.5),
-          ),
+          Text(widget.description, style: _supportTextStyle(height: 1.5)),
           const SizedBox(height: 18),
           LayoutBuilder(
             builder: (context, constraints) {
@@ -5241,17 +6554,29 @@ class _AliExpressViabilitySectionState
 
   Widget _viabilityField(String key, String label) {
     final isText = key == 'productName' || key == 'productLink';
+    final isNumber = key == 'number';
     return TextField(
       controller: _controllers[key],
+      readOnly: isNumber,
       keyboardType: isText
           ? TextInputType.text
           : const TextInputType.numberWithOptions(decimal: true),
       style: _inputTextStyle(),
       decoration: _inputDecoration(
         label: label,
-        hint: '',
-        icon: isText ? Icons.notes : Icons.calculate,
+        hint: isNumber ? 'Consecutivo automatico' : '',
+        icon: isNumber
+            ? Icons.tag
+            : isText
+            ? Icons.notes
+            : Icons.calculate,
         errorText: _errors[key],
+        suffixIcon: isNumber
+            ? Icon(
+                Icons.lock_outline,
+                color: _isNeoSkin ? _NeoColors.primary : _CyberColors.primary,
+              )
+            : null,
       ),
     );
   }
@@ -5282,7 +6607,10 @@ class _AliExpressViabilitySectionState
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
-    if (saved && mounted) _applyDefaults();
+    if (saved && mounted) {
+      _localNumberSeed = math.max(_localNumberSeed, draft.number);
+      _applyDefaults();
+    }
   }
 
   Map<String, String> _validateViability() {
@@ -5324,8 +6652,8 @@ class _AliExpressViabilitySectionState
 
   void _applyDefaults() {
     _applyDraft(
-      const AliExpressViabilityDraft(
-        number: 1,
+      AliExpressViabilityDraft(
+        number: _nextViabilityNumber(),
         productName: '',
         productLink: '',
         orderHomeCost: 0,
@@ -5334,6 +6662,17 @@ class _AliExpressViabilitySectionState
         meliCommissionRate: 0.24,
       ),
     );
+  }
+
+  double _nextViabilityNumber() {
+    var maxNumber = _localNumberSeed;
+    for (final record in widget.records) {
+      maxNumber = math.max(maxNumber, record.draft.number);
+    }
+    for (final item in widget.inventoryItems) {
+      maxNumber = math.max(maxNumber, item.id.toDouble());
+    }
+    return maxNumber + 1;
   }
 
   void _applyDraft(AliExpressViabilityDraft draft) {
@@ -6515,32 +7854,15 @@ class _SalesSectionState extends State<_SalesSection> {
             filtered: filteredItems.length,
           ),
           const SizedBox(height: 12),
-          DropdownButtonFormField<InventoryItemRecord>(
-            initialValue: _selectedItem,
-            dropdownColor: _CyberColors.card,
-            decoration: _inputDecoration(
-              label: 'Producto y bodega',
-              hint: '',
-              icon: Icons.inventory,
-            ),
-            items: filteredItems
-                .map(
-                  (item) => DropdownMenuItem(
-                    value: item,
-                    child: Text(
-                      '${item.productName} | ${item.warehouse} | ${_formatInputNumber(item.quantity)} und',
-                    ),
-                  ),
-                )
-                .toList(),
-            onChanged: (item) {
+          _InventorySalePicker(
+            items: filteredItems,
+            selectedItem: _selectedItem,
+            onSelected: (item) {
               setState(() {
                 _selectedItem = item;
-                if (item != null) {
-                  _priceController.text = _formatInputNumber(
-                    item.publicSaleValue,
-                  );
-                }
+                _priceController.text = _formatInputNumber(
+                  item.publicSaleValue,
+                );
               });
             },
           ),
@@ -6590,21 +7912,9 @@ class _SalesSectionState extends State<_SalesSection> {
           ],
           const SizedBox(height: 22),
           if (filteredSales.isEmpty)
-            const Text(
-              'Aun no hay ventas registradas.',
-              style: TextStyle(color: _CyberColors.textSecondary),
-            )
+            Text('Aun no hay ventas registradas.', style: _supportTextStyle())
           else
-            ...filteredSales.map(
-              (sale) => Container(
-                margin: const EdgeInsets.only(bottom: 10),
-                padding: const EdgeInsets.all(14),
-                decoration: _fieldDecoration(),
-                child: Text(
-                  '${sale.soldAt} | ${sale.productName} | ${sale.warehouse} | ${_formatInputNumber(sale.quantity)} und | Total ${formatCop(sale.totalSaleValue.round())}',
-                ),
-              ),
-            ),
+            ...filteredSales.map((sale) => _SaleHistoryRow(sale: sale)),
         ],
       ),
     );
@@ -6650,6 +7960,203 @@ class _SalesSectionState extends State<_SalesSection> {
   }
 }
 
+class _InventorySalePicker extends StatelessWidget {
+  const _InventorySalePicker({
+    required this.items,
+    required this.selectedItem,
+    required this.onSelected,
+  });
+
+  final List<InventoryItemRecord> items;
+  final InventoryItemRecord? selectedItem;
+  final ValueChanged<InventoryItemRecord> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.primary;
+    final textPrimary = _isNeoSkin
+        ? _NeoColors.textPrimary
+        : _CyberColors.textPrimary;
+    final textSecondary = _isNeoSkin
+        ? _NeoColors.textSecondary
+        : _CyberColors.textSecondary;
+    final visible = items.take(8).toList();
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: _fieldDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.inventory, color: accent, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                'Selecciona producto disponible',
+                style: TextStyle(
+                  color: textPrimary,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (visible.isEmpty)
+            Text(
+              'No hay productos disponibles con ese filtro.',
+              style: TextStyle(
+                color: textSecondary,
+                fontWeight: FontWeight.w700,
+              ),
+            )
+          else
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                for (final item in visible)
+                  _InventorySaleOption(
+                    item: item,
+                    selected: selectedItem?.id == item.id,
+                    onTap: () => onSelected(item),
+                  ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _InventorySaleOption extends StatelessWidget {
+  const _InventorySaleOption({
+    required this.item,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final InventoryItemRecord item;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.primary;
+    final textPrimary = _isNeoSkin
+        ? _NeoColors.textPrimary
+        : _CyberColors.textPrimary;
+    final textSecondary = _isNeoSkin
+        ? _NeoColors.textSecondary
+        : _CyberColors.textSecondary;
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        width: 260,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: selected
+              ? accent.withValues(alpha: _isNeoSkin ? 0.12 : 0.16)
+              : (_isNeoSkin
+                    ? Colors.white.withValues(alpha: 0.78)
+                    : _CyberColors.bgDarker.withValues(alpha: 0.5)),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected ? accent : textSecondary.withValues(alpha: 0.22),
+            width: selected ? 1.7 : 1,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  selected ? Icons.check_circle : Icons.radio_button_unchecked,
+                  color: selected ? accent : textSecondary,
+                  size: 18,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    item.productName,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: textPrimary,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '${item.warehouse} | ${_formatInputNumber(item.quantity)} und',
+              style: TextStyle(
+                color: textSecondary,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Venta: ${formatCop(item.publicSaleValue.round())}',
+              style: TextStyle(color: accent, fontWeight: FontWeight.w900),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SaleHistoryRow extends StatelessWidget {
+  const _SaleHistoryRow({required this.sale});
+
+  final SaleRecord sale;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = _isNeoSkin ? _NeoColors.primary : _CyberColors.primary;
+    final textSecondary = _isNeoSkin
+        ? _NeoColors.textSecondary
+        : _CyberColors.textSecondary;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: _fieldDecoration(),
+      child: Row(
+        children: [
+          Icon(Icons.receipt_long, color: accent, size: 18),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(sale.productName, style: _strongTextStyle()),
+                const SizedBox(height: 4),
+                Text(
+                  '${sale.soldAt} | ${sale.warehouse} | ${_formatInputNumber(sale.quantity)} und',
+                  style: TextStyle(
+                    color: textSecondary,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Text(
+            formatCop(sale.totalSaleValue.round()),
+            style: TextStyle(color: accent, fontWeight: FontWeight.w900),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _StockAlert extends StatelessWidget {
   const _StockAlert({required this.items});
 
@@ -6657,26 +8164,109 @@ class _StockAlert extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final names = items
-        .take(4)
-        .map(
-          (item) =>
-              '${item.productName} (${_formatInputNumber(item.quantity)})',
-        )
-        .join(', ');
+    final accent = _isNeoSkin ? _CyberColors.accent : _CyberColors.accent;
+    final textColor = _isNeoSkin ? const Color(0xff991b1b) : accent;
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: _CyberColors.accent.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _CyberColors.accent),
+        color: _CyberColors.accent.withValues(alpha: _isNeoSkin ? 0.08 : 0.1),
+        borderRadius: BorderRadius.circular(_isNeoSkin ? 14 : 10),
+        border: Border.all(color: _CyberColors.accent.withValues(alpha: 0.85)),
       ),
-      child: Text(
-        'Alerta de inventario bajo: $names',
-        style: const TextStyle(
-          color: _CyberColors.accent,
-          fontWeight: FontWeight.w900,
-        ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, color: textColor),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Alerta de inventario bajo',
+                  style: TextStyle(
+                    color: textColor,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
+                decoration: BoxDecoration(
+                  color: _CyberColors.accent.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '${items.length} productos',
+                  style: TextStyle(
+                    color: textColor,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final item in items.take(12))
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _isNeoSkin
+                        ? Colors.white.withValues(alpha: 0.78)
+                        : _CyberColors.bgDarker.withValues(alpha: 0.48),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: _CyberColors.accent.withValues(alpha: 0.22),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.inventory_2, color: textColor, size: 16),
+                      const SizedBox(width: 6),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 260),
+                        child: Text(
+                          item.productName,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: textColor,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        '${_formatInputNumber(item.quantity)} und',
+                        style: TextStyle(
+                          color: textColor,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              if (items.length > 12)
+                Text(
+                  '+${items.length - 12} mas',
+                  style: TextStyle(
+                    color: textColor,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -8327,6 +9917,46 @@ bool _smartMatches(String query, Iterable<String> values) {
       .split(' ')
       .where((token) => token.isNotEmpty)
       .every(haystack.contains);
+}
+
+bool _looseTokenMatch(String query, Iterable<String> values) {
+  final tokens = _normalizeSearchText(query)
+      .split(' ')
+      .where((token) => token.length >= 3)
+      .map(_looseSingularToken)
+      .toList();
+  if (tokens.isEmpty) return true;
+  final hayTokens = values
+      .map(_normalizeSearchText)
+      .join(' ')
+      .split(' ')
+      .where((token) => token.length >= 3)
+      .map(_looseSingularToken)
+      .toList();
+  return tokens.every(
+    (queryToken) => hayTokens.any(
+      (token) =>
+          token.contains(queryToken) ||
+          queryToken.contains(token) ||
+          _prefixStem(token).contains(_prefixStem(queryToken)) ||
+          _prefixStem(queryToken).contains(_prefixStem(token)),
+    ),
+  );
+}
+
+String _looseSingularToken(String token) {
+  if (token.endsWith('es') && token.length > 4) {
+    return token.substring(0, token.length - 2);
+  }
+  if (token.endsWith('s') && token.length > 3) {
+    return token.substring(0, token.length - 1);
+  }
+  return token;
+}
+
+String _prefixStem(String token) {
+  if (token.length <= 4) return token;
+  return token.substring(0, 4);
 }
 
 String _normalizeSearchText(String value) {
